@@ -1,0 +1,6 @@
+{
+  "name": "Simple Code Playground",
+  "description": "Un editor di codice semplice e leggero per scrivere HTML, CSS, JS, JSX, TSX e JSON con evidenziazione della sintassi in tempo reale. Supporta il caricamento di intere cartelle locali e il download dei file.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
