@@ -41,49 +41,70 @@ interface Toast {
 export default function App() {
   // --- STATE ---
   const [files, setFiles] = useState<VirtualFile[]>(() => {
-    const saved = localStorage.getItem('codice_playground_files');
-    return saved ? JSON.parse(saved) : defaultFiles;
+    try {
+      const saved = localStorage.getItem('codice_playground_files');
+      return saved ? JSON.parse(saved) : defaultFiles;
+    } catch (e) {
+      console.warn('Impossibile caricare i file da localStorage:', e);
+      return defaultFiles;
+    }
   });
 
   const [activeFilePath, setActiveFilePath] = useState<string | null>(() => {
-    const savedActive = localStorage.getItem('codice_playground_active');
-    if (savedActive) {
-      // Ensure the saved active file actually exists
-      const savedExists = localStorage.getItem('codice_playground_files');
-      if (savedExists) {
-        const parsedFiles = JSON.parse(savedExists) as VirtualFile[];
-        if (parsedFiles.some(f => f.path === savedActive)) return savedActive;
+    try {
+      const savedActive = localStorage.getItem('codice_playground_active');
+      if (savedActive) {
+        // Ensure the saved active file actually exists
+        const savedExists = localStorage.getItem('codice_playground_files');
+        if (savedExists) {
+          const parsedFiles = JSON.parse(savedExists) as VirtualFile[];
+          if (parsedFiles.some(f => f.path === savedActive)) return savedActive;
+        }
       }
-    }
+    } catch (e) {}
     return defaultFiles.length > 0 ? defaultFiles[0].path : null;
   });
 
   const [openTabs, setOpenTabs] = useState<string[]>(() => {
-    const savedTabs = localStorage.getItem('codice_playground_tabs');
-    if (savedTabs) {
-      const parsedTabs = JSON.parse(savedTabs) as string[];
-      // Filter out any tabs that no longer exist
-      const savedFilesStr = localStorage.getItem('codice_playground_files');
-      const filesList = savedFilesStr ? JSON.parse(savedFilesStr) as VirtualFile[] : defaultFiles;
-      return parsedTabs.filter(p => filesList.some(f => f.path === p));
-    }
+    try {
+      const savedTabs = localStorage.getItem('codice_playground_tabs');
+      if (savedTabs) {
+        const parsedTabs = JSON.parse(savedTabs) as string[];
+        // Filter out any tabs that no longer exist
+        const savedFilesStr = localStorage.getItem('codice_playground_files');
+        const filesList = savedFilesStr ? JSON.parse(savedFilesStr) as VirtualFile[] : defaultFiles;
+        return parsedTabs.filter(p => filesList.some(f => f.path === p));
+      }
+    } catch (e) {}
     return defaultFiles.slice(0, 3).map(f => f.path);
   });
 
   // Editor configuration
   const [fontSize, setFontSize] = useState<number>(() => {
-    const saved = localStorage.getItem('codice_playground_font_size');
-    return saved ? Number(saved) : 14;
+    try {
+      const saved = localStorage.getItem('codice_playground_font_size');
+      return saved ? Number(saved) : 14;
+    } catch (e) {
+      return 14;
+    }
   });
 
   const [wordWrap, setWordWrap] = useState<boolean>(() => {
-    const saved = localStorage.getItem('codice_playground_word_wrap');
-    return saved ? saved === 'true' : true;
+    try {
+      const saved = localStorage.getItem('codice_playground_word_wrap');
+      return saved ? saved === 'true' : true;
+    } catch (e) {
+      return true;
+    }
   });
 
   const [showPreview, setShowPreview] = useState<boolean>(() => {
-    const saved = localStorage.getItem('codice_playground_show_preview');
-    return saved ? saved === 'true' : true;
+    try {
+      const saved = localStorage.getItem('codice_playground_show_preview');
+      return saved ? saved === 'true' : true;
+    } catch (e) {
+      return true;
+    }
   });
 
   // Toasts
@@ -93,31 +114,46 @@ export default function App() {
 
   // --- LOCALSTORAGE PERSISTENCE ---
   useEffect(() => {
-    localStorage.setItem('codice_playground_files', JSON.stringify(files));
+    try {
+      localStorage.setItem('codice_playground_files', JSON.stringify(files));
+    } catch (err) {
+      console.warn('Quota localStorage superata per la lista di file:', err);
+      showToast('Spazio di archiviazione locale del browser pieno: alcune modifiche non saranno salvate tra un riavvio e l\'altro.', 'error');
+    }
   }, [files]);
 
   useEffect(() => {
-    if (activeFilePath) {
-      localStorage.setItem('codice_playground_active', activeFilePath);
-    } else {
-      localStorage.removeItem('codice_playground_active');
-    }
+    try {
+      if (activeFilePath) {
+        localStorage.setItem('codice_playground_active', activeFilePath);
+      } else {
+        localStorage.removeItem('codice_playground_active');
+      }
+    } catch (e) {}
   }, [activeFilePath]);
 
   useEffect(() => {
-    localStorage.setItem('codice_playground_tabs', JSON.stringify(openTabs));
+    try {
+      localStorage.setItem('codice_playground_tabs', JSON.stringify(openTabs));
+    } catch (e) {}
   }, [openTabs]);
 
   useEffect(() => {
-    localStorage.setItem('codice_playground_font_size', String(fontSize));
+    try {
+      localStorage.setItem('codice_playground_font_size', String(fontSize));
+    } catch (e) {}
   }, [fontSize]);
 
   useEffect(() => {
-    localStorage.setItem('codice_playground_word_wrap', String(wordWrap));
+    try {
+      localStorage.setItem('codice_playground_word_wrap', String(wordWrap));
+    } catch (e) {}
   }, [wordWrap]);
 
   useEffect(() => {
-    localStorage.setItem('codice_playground_show_preview', String(showPreview));
+    try {
+      localStorage.setItem('codice_playground_show_preview', String(showPreview));
+    } catch (e) {}
   }, [showPreview]);
 
   // --- TOAST NOTIFICATIONS HELPER ---

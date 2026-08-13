@@ -24,17 +24,26 @@ interface PreviewProps {
 
 export const Preview: React.FC<PreviewProps> = ({ files, onClose, isStandalone = false }) => {
   const [deviceMode, setDeviceMode] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
-  const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const [consoleLogs, setConsoleLogs] = useState<ConsoleMessage[]>([]);
   const [showConsole, setShowConsole] = useState<boolean>(false);
   const [filterText, setFilterText] = useState<string>('');
+  const [srcDoc, setSrcDoc] = useState<string>('');
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Build the live HTML doc
-  const srcDoc = React.useMemo(() => {
-    return buildPreviewHtml(files);
+  // Debounced build of live preview HTML doc to avoid crashes/lag on pasting large text
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        const html = buildPreviewHtml(files);
+        setSrcDoc(html);
+      } catch (err: any) {
+        setSrcDoc(`<!DOCTYPE html><html><body style="background:#0F172A;color:#f87171;padding:20px;font-family:sans-serif;"><h3>Errore Anteprima</h3><pre>${err?.message || err}</pre></body></html>`);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
   }, [files, refreshKey]);
 
   // Handle messages from the iframe (captured console logs)
