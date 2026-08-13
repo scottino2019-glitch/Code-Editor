@@ -13,6 +13,9 @@ import {
   WelcomeScreen 
 } from './components/WelcomeScreen';
 import { 
+  Preview 
+} from './components/Preview';
+import { 
   VirtualFile, 
   getLanguageFromExtension 
 } from './types';
@@ -78,6 +81,11 @@ export default function App() {
     return saved ? saved === 'true' : true;
   });
 
+  const [showPreview, setShowPreview] = useState<boolean>(() => {
+    const saved = localStorage.getItem('codice_playground_show_preview');
+    return saved ? saved === 'true' : true;
+  });
+
   // Toasts
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -107,6 +115,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('codice_playground_word_wrap', String(wordWrap));
   }, [wordWrap]);
+
+  useEffect(() => {
+    localStorage.setItem('codice_playground_show_preview', String(showPreview));
+  }, [showPreview]);
 
   // --- TOAST NOTIFICATIONS HELPER ---
   const showToast = (message: string, type: Toast['type'] = 'info') => {
@@ -355,15 +367,31 @@ export default function App() {
             <span className="text-xl font-bold text-white tracking-tight">
               Codice<span className="text-[#38BDF8]">.</span>
             </span>
-            <span className="text-[10px] uppercase tracking-widest font-semibold bg-[#0B1120] border border-slate-800 text-slate-400 px-1.5 py-0.5 rounded">
-              Senza Anteprime
+            <span className="text-[10px] uppercase tracking-widest font-semibold bg-[#0B1120] border border-emerald-500/30 text-emerald-400 px-2 py-0.5 rounded flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+              Anteprima Live
             </span>
           </div>
         </div>
 
-        {/* Global actions: Reset / Clear / Help */}
+        {/* Global actions: Preview / Reset / Clear / Help */}
         <div className="flex items-center space-x-3">
           
+          {/* Toggle Live Preview Header Button */}
+          <button
+            onClick={() => setShowPreview(!showPreview)}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-md border transition-all ${
+              showPreview 
+                ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300' 
+                : 'bg-[#1E293B] border-slate-800 text-slate-300 hover:text-white'
+            }`}
+            title="Attiva o disattiva l'anteprima live in tempo reale"
+            id="btn-header-toggle-preview"
+          >
+            <span className={`w-2 h-2 rounded-full ${showPreview ? 'bg-emerald-400' : 'bg-slate-500'}`}></span>
+            <span>{showPreview ? 'Anteprima On' : 'Mostra Anteprima'}</span>
+          </button>
+
           {/* Shortcuts Help */}
           <button
             onClick={() => setShowShortcutsHelp(!showShortcutsHelp)}
@@ -403,49 +431,63 @@ export default function App() {
           onDownloadAll={handleDownloadAllAsZip}
         />
 
-        {/* Right Side: Tab bar, Metadata bar and Editor */}
-        <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#1e1e1e]">
+        {/* Workspace Body: Split View of Code Editor & Live Preview */}
+        <div className="flex-1 flex flex-col md:flex-row min-w-0 overflow-hidden bg-[#1e1e1e]">
           
-          {activeFile ? (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <EditorHeader
-                files={files}
-                activeFilePath={activeFilePath}
-                openTabs={openTabs}
-                onSelectTab={handleSelectFile}
-                onCloseTab={handleCloseTab}
-                onDownloadCurrentFile={handleDownloadActiveFile}
-                fontSize={fontSize}
-                setFontSize={setFontSize}
-                wordWrap={wordWrap}
-                setWordWrap={setWordWrap}
-              />
-              <div className="flex-1 overflow-hidden relative">
-                <EditorArea
-                  value={activeFile.content}
-                  language={activeFile.language}
-                  onChange={handleContentChange}
+          {/* Editor Container */}
+          <div className={`flex-1 flex flex-col overflow-hidden ${showPreview ? 'md:w-1/2' : 'w-full'}`}>
+            {activeFile ? (
+              <div className="flex-1 flex flex-col overflow-hidden">
+                <EditorHeader
+                  files={files}
+                  activeFilePath={activeFilePath}
+                  openTabs={openTabs}
+                  onSelectTab={handleSelectFile}
+                  onCloseTab={handleCloseTab}
+                  onDownloadCurrentFile={handleDownloadActiveFile}
                   fontSize={fontSize}
+                  setFontSize={setFontSize}
                   wordWrap={wordWrap}
+                  setWordWrap={setWordWrap}
+                  showPreview={showPreview}
+                  onTogglePreview={() => setShowPreview(!showPreview)}
                 />
+                <div className="flex-1 overflow-hidden relative">
+                  <EditorArea
+                    value={activeFile.content}
+                    language={activeFile.language}
+                    onChange={handleContentChange}
+                    fontSize={fontSize}
+                    wordWrap={wordWrap}
+                  />
+                </div>
               </div>
+            ) : (
+              <WelcomeScreen
+                onCreateNewFile={() => {
+                  const input = prompt('Inserisci il nome del file (es: index.html, styles.css):');
+                  if (input) handleCreateFile(input);
+                }}
+                onUploadFolder={() => {
+                  const btn = document.getElementById('btn-upload-folder');
+                  btn?.click();
+                }}
+                onUploadFiles={() => {
+                  const btn = document.getElementById('btn-upload-files');
+                  btn?.click();
+                }}
+              />
+            )}
+          </div>
+
+          {/* Live Preview Panel */}
+          {showPreview && (
+            <div className="md:w-1/2 h-1/2 md:h-full border-t md:border-t-0 md:border-l border-slate-800 flex flex-col overflow-hidden">
+              <Preview 
+                files={files} 
+                onClose={() => setShowPreview(false)}
+              />
             </div>
-          ) : (
-            <WelcomeScreen
-              onCreateNewFile={() => {
-                const input = prompt('Inserisci il nome del file (es: index.html, styles.css):');
-                if (input) handleCreateFile(input);
-              }}
-              onUploadFolder={() => {
-                // Focus file tree's folder trigger
-                const btn = document.getElementById('btn-upload-folder');
-                btn?.click();
-              }}
-              onUploadFiles={() => {
-                const btn = document.getElementById('btn-upload-files');
-                btn?.click();
-              }}
-            />
           )}
 
         </div>

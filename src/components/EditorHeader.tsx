@@ -7,7 +7,10 @@ import {
   AlignLeft, 
   Maximize2,
   Type,
-  WrapText
+  WrapText,
+  Play,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { VirtualFile } from '../types';
 
@@ -24,6 +27,10 @@ interface EditorHeaderProps {
   setFontSize: (size: number) => void;
   wordWrap: boolean;
   setWordWrap: (wrap: boolean) => void;
+
+  // Preview control
+  showPreview: boolean;
+  onTogglePreview: () => void;
 }
 
 export const EditorHeader: React.FC<EditorHeaderProps> = ({
@@ -37,6 +44,8 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
   setFontSize,
   wordWrap,
   setWordWrap,
+  showPreview,
+  onTogglePreview,
 }) => {
   const activeFile = files.find(f => f.path === activeFilePath);
 
@@ -164,6 +173,21 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
             >
               <WrapText className="w-3.5 h-3.5" />
               <span className="text-[10px] hidden sm:inline">A Capo</span>
+            </button>
+
+            {/* Toggle Preview Button */}
+            <button
+              onClick={onTogglePreview}
+              className={`flex items-center space-x-1.5 px-2.5 py-1 rounded border transition-all text-[11px] font-bold ${
+                showPreview 
+                  ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/30' 
+                  : 'bg-[#1E293B] border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800'
+              }`}
+              title={showPreview ? 'Nascondi anteprima live' : 'Mostra anteprima live in tempo reale'}
+              id="btn-toggle-preview"
+            >
+              <Play className={`w-3.5 h-3.5 ${showPreview ? 'fill-emerald-400 text-emerald-400' : ''}`} />
+              <span>{showPreview ? 'Anteprima Attiva' : 'Mostra Anteprima'}</span>
             </button>
 
             {/* Download File Button */}
