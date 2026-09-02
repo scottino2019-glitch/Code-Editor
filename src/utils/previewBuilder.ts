@@ -135,14 +135,40 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
       }
     }
 
-    // 8. Extract local <script src="..."> tags from HTML
+    // 8. Extract local <script src="..."> tags and inline scripts from HTML
     const localScriptEntries: string[] = [];
-    rawHtml = rawHtml.replace(/<script\b([^>]*)src=["']([^"']+)["']([^>]*)>\s*<\/script>/gi, (match, _before, src, _after) => {
+    rawHtml = rawHtml.replace(/<script\b([^>]*)src=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/script>/gi, (match, before, src, after) => {
       if (/^(https?:|\/\/)/i.test(src)) {
         return match; // Keep external CDN scripts
       }
       localScriptEntries.push(src);
       return `<!-- [Script eseguito dal modulo virtuale: ${src}] -->`;
+    });
+
+    // Also transpile any inline <script>...</script> tags in HTML that might contain import/export or JSX
+    rawHtml = rawHtml.replace(/<script\b(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/gi, (match, attrs, inlineCode) => {
+      // If it's a known non-JS script (like JSON or template), leave it untouched
+      if (/type=["'](application\/json|text\/html|text\/template)["']/i.test(attrs)) {
+        return match;
+      }
+      // If inline script contains import or export statements, transpile it to avoid "Cannot use import statement outside a module"
+      if (/\b(import|export)\b/.test(inlineCode)) {
+        try {
+          const transformedInline = Babel.transform(inlineCode, {
+            presets: [
+              ['env', { modules: 'cjs' }],
+              'react',
+              'typescript'
+            ]
+          });
+          const wrapped = `(function(require, module, exports) {\n${transformedInline.code}\n})(window.__createRequire ? window.__createRequire('') : function(m){ return window[m]; }, { exports: {} }, {});`;
+          return `<script ${attrs}>\n${wrapped}\n</script>`;
+        } catch (e) {
+          // Fallback to type="module" so browser module loader can handle it if possible
+          return `<script type="module" ${attrs}>\n${inlineCode}\n</script>`;
+        }
+      }
+      return match;
     });
 
     // 9. Transpile all JS / TS / JSX / TSX files with Babel and build virtual modules dictionary
@@ -167,7 +193,7 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
       try {
         const transformed = Babel.transform(code, {
           presets: [
-            'env',
+            ['env', { modules: 'cjs' }],
             'react',
             'typescript'
           ],
