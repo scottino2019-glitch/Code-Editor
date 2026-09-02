@@ -169,7 +169,7 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
           presets: [
             'env',
             'react',
-            ['typescript', { allExtensions: true, isTSX: true }]
+            'typescript'
           ],
           filename: jsFile.name.endsWith('.tsx') || jsFile.name.endsWith('.ts') ? jsFile.name : `${jsFile.name}.tsx`
         });
