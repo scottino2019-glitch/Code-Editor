@@ -207,6 +207,7 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
         moduleDefs.push(`
 // --- Module: ${jsFile.path} ---
 (function() {
+  window.__modules__ = window.__modules__ || {};
   var modFn = function(require, module, exports) {
     try {
 ${compiledCode}
@@ -710,7 +711,14 @@ ${moduleDefs.join('\n')}
       rawHtml = `<!DOCTYPE html><html><head>${consoleScript}${cdnScripts}</head><body>${rawHtml}</body></html>`;
     }
 
-    const scriptsBlock = `\n${modulesBundle}\n${runtimeScript}\n`;
+    const initScript = `
+<script id="__playground_init__">
+  window.__modules__ = window.__modules__ || {};
+  window.__moduleCache__ = window.__moduleCache__ || {};
+</script>
+`;
+
+    const scriptsBlock = `\n${initScript}\n${modulesBundle}\n${runtimeScript}\n`;
     if (rawHtml.includes('</body>')) {
       rawHtml = rawHtml.replace('</body>', () => `${scriptsBlock}</body>`);
     } else {

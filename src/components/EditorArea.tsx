@@ -7,6 +7,8 @@ interface EditorAreaProps {
   onChange: (newValue: string | undefined) => void;
   fontSize: number;
   wordWrap: boolean;
+  onOpenPasteModal?: () => void;
+  onEditorReady?: (editor: any) => void;
 }
 
 export const EditorArea: React.FC<EditorAreaProps> = ({
@@ -15,17 +17,22 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
   onChange,
   fontSize,
   wordWrap,
+  onOpenPasteModal,
+  onEditorReady,
 }) => {
   const editorRef = useRef<any>(null);
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    if (onEditorReady) {
+      onEditorReady(editor);
+    }
 
-    // Register custom context menu Paste action for right-click in iframe
+    // Register custom context menu Paste action for right-click
+    // Note: Do NOT bind KeyMod.CtrlCmd | KeyCode.KeyV so the browser's native paste handler works flawlessly!
     editor.addAction({
       id: 'custom-paste-action',
-      label: 'Incolla Codice (Paste)',
-      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyV],
+      label: 'Incolla Codice (Finestra di Incolla)...',
       contextMenuGroupId: '9_cutcopypaste',
       contextMenuOrder: 1,
       run: async (ed) => {
@@ -44,19 +51,10 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
               }
             }
           }
-          throw new Error('Clipboard API unavailable or permission denied');
+          throw new Error('Clipboard API unavailable in iframe');
         } catch (err) {
-          // Fallback if browser blocks clipboard API reading inside iframe
-          const pastedText = window.prompt('Incolla qui il tuo codice (Ctrl+V / Cmd+V) e premi OK:');
-          if (pastedText !== null && pastedText !== undefined) {
-            const selection = ed.getSelection();
-            if (selection) {
-              ed.executeEdits('custom-paste', [{
-                range: selection,
-                text: pastedText,
-                forceMoveMarkers: true
-              }]);
-            }
+          if (onOpenPasteModal) {
+            onOpenPasteModal();
           }
         }
       }

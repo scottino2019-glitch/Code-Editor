@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import JSZip from 'jszip';
 import { 
   FileTree 
@@ -15,6 +15,9 @@ import {
 import { 
   Preview 
 } from './components/Preview';
+import { 
+  PasteModal 
+} from './components/PasteModal';
 import { 
   VirtualFile, 
   getLanguageFromExtension 
@@ -111,6 +114,8 @@ export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
+  const [showPasteModal, setShowPasteModal] = useState(false);
+  const editorInstanceRef = useRef<any>(null);
 
   // --- LOCALSTORAGE PERSISTENCE ---
   useEffect(() => {
@@ -282,6 +287,50 @@ export default function App() {
       }
       return f;
     }));
+  };
+
+  // Paste handlers
+  const handlePasteReplace = (code: string) => {
+    if (activeFilePath) {
+      handleContentChange(code);
+      const curFile = files.find(f => f.path === activeFilePath);
+      showToast(`Codice incollato con successo in "${curFile?.name || 'file'}"!`, 'success');
+    } else {
+      handleCreateFile('App.tsx');
+      setTimeout(() => {
+        handleContentChange(code);
+      }, 50);
+      showToast('Creato "App.tsx" con il codice incollato!', 'success');
+    }
+  };
+
+  const handlePasteInsert = (code: string) => {
+    if (editorInstanceRef.current) {
+      const ed = editorInstanceRef.current;
+      const selection = ed.getSelection();
+      if (selection) {
+        ed.executeEdits('paste-modal-insert', [{
+          range: selection,
+          text: code,
+          forceMoveMarkers: true
+        }]);
+        showToast('Codice inserito nella posizione del cursore!', 'success');
+        return;
+      }
+    }
+    const curFile = files.find(f => f.path === activeFilePath);
+    if (curFile) {
+      handleContentChange((curFile.content ? curFile.content + '\n' : '') + code);
+      showToast('Codice inserito nel file!', 'success');
+    }
+  };
+
+  const handleCreateNewWithCode = (suggestedName: string, code: string) => {
+    const fileName = suggestedName.trim() || 'NuovoComponente.tsx';
+    handleCreateFile(fileName);
+    setTimeout(() => {
+      handleContentChange(code);
+    }, 50);
   };
 
   // Upload/merge files
@@ -481,6 +530,7 @@ export default function App() {
                   onSelectTab={handleSelectFile}
                   onCloseTab={handleCloseTab}
                   onDownloadCurrentFile={handleDownloadActiveFile}
+                  onOpenPasteModal={() => setShowPasteModal(true)}
                   fontSize={fontSize}
                   setFontSize={setFontSize}
                   wordWrap={wordWrap}
@@ -495,6 +545,8 @@ export default function App() {
                     onChange={handleContentChange}
                     fontSize={fontSize}
                     wordWrap={wordWrap}
+                    onOpenPasteModal={() => setShowPasteModal(true)}
+                    onEditorReady={(ed) => { editorInstanceRef.current = ed; }}
                   />
                 </div>
               </div>
@@ -504,6 +556,7 @@ export default function App() {
                   const input = prompt('Inserisci il nome del file (es: index.html, styles.css):');
                   if (input) handleCreateFile(input);
                 }}
+                onPasteCode={() => setShowPasteModal(true)}
                 onUploadFolder={() => {
                   const btn = document.getElementById('btn-upload-folder');
                   btn?.click();
@@ -617,6 +670,16 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* --- PASTE CODE MODAL --- */}
+      <PasteModal
+        isOpen={showPasteModal}
+        onClose={() => setShowPasteModal(false)}
+        fileName={activeFile?.name || ''}
+        onPasteReplace={handlePasteReplace}
+        onPasteInsert={handlePasteInsert}
+        onCreateNewWithCode={handleCreateNewWithCode}
+      />
 
       {/* --- TOASTS NOTIFICATION LAYER --- */}
       <div className="fixed bottom-4 right-4 z-50 flex flex-col space-y-2 max-w-sm">

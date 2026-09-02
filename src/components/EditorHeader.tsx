@@ -10,7 +10,8 @@ import {
   WrapText,
   Play,
   Eye,
-  EyeOff
+  EyeOff,
+  ClipboardPaste
 } from 'lucide-react';
 import { VirtualFile } from '../types';
 
@@ -21,6 +22,7 @@ interface EditorHeaderProps {
   onSelectTab: (path: string) => void;
   onCloseTab: (path: string) => void;
   onDownloadCurrentFile: () => void;
+  onOpenPasteModal: () => void;
   
   // Editor preferences
   fontSize: number;
@@ -40,6 +42,7 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
   onSelectTab,
   onCloseTab,
   onDownloadCurrentFile,
+  onOpenPasteModal,
   fontSize,
   setFontSize,
   wordWrap,
@@ -173,6 +176,17 @@ export const EditorHeader: React.FC<EditorHeaderProps> = ({
             >
               <WrapText className="w-3.5 h-3.5" />
               <span className="text-[10px] hidden sm:inline">A Capo</span>
+            </button>
+
+            {/* Incolla Codice Button */}
+            <button
+              onClick={onOpenPasteModal}
+              className="flex items-center space-x-1.5 px-2.5 py-1 rounded border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 hover:text-amber-200 transition-all text-[11px] font-semibold"
+              title="Incolla codice direttamente in questo file (anche se il browser limita il tasto destro nell'iframe)"
+              id="btn-header-paste-modal"
+            >
+              <ClipboardPaste className="w-3.5 h-3.5 text-amber-400" />
+              <span>Incolla Codice</span>
             </button>
 
             {/* Toggle Preview Button */}

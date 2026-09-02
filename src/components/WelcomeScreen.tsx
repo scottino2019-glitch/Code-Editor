@@ -9,19 +9,22 @@ import {
   Cpu, 
   Zap, 
   CheckCircle2,
-  Settings
+  Settings,
+  ClipboardPaste
 } from 'lucide-react';
 
 interface WelcomeScreenProps {
   onUploadFolder: () => void;
   onUploadFiles: () => void;
   onCreateNewFile: () => void;
+  onPasteCode?: () => void;
 }
 
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   onUploadFolder,
   onUploadFiles,
-  onCreateNewFile
+  onCreateNewFile,
+  onPasteCode,
 }) => {
   return (
     <div className="flex-1 bg-[#0F172A] flex flex-col justify-center items-center p-8 text-center text-slate-300 overflow-y-auto">
@@ -50,7 +53,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         </div>
 
         {/* Core Actions Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 w-full mt-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 w-full mt-4">
           <div 
             onClick={onCreateNewFile}
             className="group flex flex-col items-center p-5 bg-[#1E293B] hover:bg-[#1E293B]/80 border border-slate-800 hover:border-[#38BDF8]/50 rounded-xl cursor-pointer transition-all duration-300"
@@ -59,7 +62,18 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
               <Plus className="w-5 h-5" />
             </div>
             <h3 className="text-sm font-semibold text-white mb-1">Nuovo File</h3>
-            <p className="text-xs text-slate-400">Crea un file HTML, CSS, JS, JSX, TSX o JSON</p>
+            <p className="text-xs text-slate-400">Crea un file HTML, CSS, TSX o JS</p>
+          </div>
+
+          <div 
+            onClick={onPasteCode}
+            className="group flex flex-col items-center p-5 bg-[#1E293B] hover:bg-[#1E293B]/80 border border-slate-800 hover:border-emerald-500/50 rounded-xl cursor-pointer transition-all duration-300"
+          >
+            <div className="p-3 bg-emerald-500/10 text-emerald-400 group-hover:bg-emerald-500/20 group-hover:text-emerald-300 rounded-lg transition-colors mb-3">
+              <ClipboardPaste className="w-5 h-5" />
+            </div>
+            <h3 className="text-sm font-semibold text-white mb-1">Incolla Codice</h3>
+            <p className="text-xs text-slate-400">Incolla subito codice copiato</p>
           </div>
 
           <div 
@@ -70,7 +84,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
               <FolderUp className="w-5 h-5" />
             </div>
             <h3 className="text-sm font-semibold text-white mb-1">Apri Cartella</h3>
-            <p className="text-xs text-slate-400">Carica una cartella dal tuo PC locale</p>
+            <p className="text-xs text-slate-400">Carica una cartella dal PC</p>
           </div>
 
           <div 
@@ -81,7 +95,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
               <FileUp className="w-5 h-5" />
             </div>
             <h3 className="text-sm font-semibold text-white mb-1">Apri File</h3>
-            <p className="text-xs text-slate-400">Seleziona singoli file dal computer</p>
+            <p className="text-xs text-slate-400">Seleziona singoli file</p>
           </div>
         </div>
 
