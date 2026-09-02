@@ -26,6 +26,9 @@ export const defaultFiles: VirtualFile[] = [
                 <!-- Verrà popolato tramite JavaScript -->
             </ul>
         </section>
+
+        <!-- Punto di montaggio per componenti React (es. App.tsx, Counter.jsx) -->
+        <div id="root" style="margin-top: 1.5rem;"></div>
     </main>
 
     <script src="app.js"></script>
