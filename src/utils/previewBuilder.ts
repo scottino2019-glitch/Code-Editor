@@ -71,6 +71,13 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
         }
         return String(arg);
       });
+
+      const strContent = formattedArgs.join(' ');
+      // Ignora l'avviso informativo standard del CDN di Tailwind (normale nei playground/sandbox)
+      if (strContent.includes('cdn.tailwindcss.com should not be used in production')) {
+        return;
+      }
+
       window.parent.postMessage({
         type: 'PREVIEW_CONSOLE_LOG',
         logType: type,
@@ -153,11 +160,8 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
       // Smart JSX Fix:
       // If user wrote <ComponentName.tsx ... /> or <ComponentName.jsx ... /> in JSX,
       // in React this evaluates to React.createElement(ComponentName.tsx) which is undefined.
-      // Auto-correct to <ComponentName ... /> and warn in console.
-      const badJsxTagRegex = /<(\/?)\s*([a-zA-Z][a-zA-Z0-9_]*)\.(?:tsx|jsx|ts|js)(\s|\/|>)/g;
-      if (badJsxTagRegex.test(code)) {
-        code = code.replace(badJsxTagRegex, '<$1$2$3');
-      }
+      // Auto-correct to <ComponentName ... />
+      code = code.replace(/<(\/?)\s*([A-Za-z0-9_$]+)\.(?:tsx|jsx|ts|js)\b/gi, '<$1$2');
 
       try {
         const transformed = Babel.transform(code, {
@@ -358,6 +362,25 @@ ${compiledCode}
       var moduleObj = { exports: {} };
       window.__moduleCache__[resolved] = moduleObj;
       fn(window.__createRequire(resolved), moduleObj, moduleObj.exports);
+
+      // Auto-bridge default export if user exported a named component or default is missing
+      if (moduleObj.exports && typeof moduleObj.exports === 'object') {
+        if (!moduleObj.exports.default) {
+          var keys = Object.keys(moduleObj.exports).filter(function(k) { return k !== '__esModule'; });
+          if (keys.length === 1 && typeof moduleObj.exports[keys[0]] === 'function') {
+            moduleObj.exports.default = moduleObj.exports[keys[0]];
+          } else if (keys.length > 1) {
+            var fnName = (resolved.split('/').pop() || '').split('.')[0];
+            for (var k = 0; k < keys.length; k++) {
+              if (keys[k].toLowerCase() === fnName.toLowerCase() && typeof moduleObj.exports[keys[k]] === 'function') {
+                moduleObj.exports.default = moduleObj.exports[keys[k]];
+                break;
+              }
+            }
+          }
+        }
+      }
+
       return moduleObj.exports;
     };
   };
@@ -392,7 +415,15 @@ ${compiledCode}
         try {
           var modExports = window.__createRequire('')(match);
           if (modExports) {
-            var candidate = modExports.default || modExports.App || (typeof modExports === 'function' ? modExports : null);
+            var candidate = modExports.default || modExports.App || modExports.app || (typeof modExports === 'function' ? modExports : null);
+            if (!candidate && typeof modExports === 'object') {
+              for (var prop in modExports) {
+                if (prop !== '__esModule' && typeof modExports[prop] === 'function') {
+                  candidate = modExports[prop];
+                  break;
+                }
+              }
+            }
             if (candidate && !appComponent) {
               appComponent = candidate;
             }
@@ -403,7 +434,7 @@ ${compiledCode}
       }
     }
 
-    // 3. Auto-mount React App if #root or #app container is empty
+    // 3. Auto-mount React App if found
     if (appComponent && window.React && window.ReactDOM) {
       var rootEl = document.getElementById('root') || document.getElementById('app');
       if (!rootEl) {
@@ -412,9 +443,66 @@ ${compiledCode}
         document.body.appendChild(rootEl);
       }
 
-      if (rootEl && (!rootEl.childNodes || rootEl.childNodes.length === 0)) {
+      if (rootEl) {
         try {
-          var appElem = window.React.createElement(appComponent);
+          // React Error Boundary
+          var ErrorBoundaryClass = (function(_super) {
+            function ErrorBoundaryClass(props) {
+              _super.call(this, props);
+              this.state = { hasError: false, error: null };
+            }
+            if (window.React.Component) {
+              ErrorBoundaryClass.prototype = Object.create(window.React.Component.prototype);
+              ErrorBoundaryClass.prototype.constructor = ErrorBoundaryClass;
+              ErrorBoundaryClass.getDerivedStateFromError = function(error) {
+                return { hasError: true, error: error };
+              };
+              ErrorBoundaryClass.prototype.componentDidCatch = function(error, info) {
+                console.error("Errore nel rendering React:", error, info);
+              };
+              ErrorBoundaryClass.prototype.render = function() {
+                if (this.state.hasError) {
+                  return window.React.createElement('div', {
+                    style: {
+                      padding: '20px',
+                      margin: '16px',
+                      backgroundColor: '#1e1e2e',
+                      border: '2px solid #ef4444',
+                      borderRadius: '10px',
+                      color: '#f8fafc',
+                      fontFamily: 'system-ui, -apple-system, sans-serif'
+                    }
+                  },
+                    window.React.createElement('div', {
+                      style: { display: 'flex', alignItems: 'center', gap: '8px', color: '#f87171', fontWeight: 'bold', fontSize: '16px', marginBottom: '8px' }
+                    }, '⚠️ Errore nel Componente React'),
+                    window.React.createElement('div', {
+                      style: { fontSize: '13px', color: '#cbd5e1', marginBottom: '12px' }
+                    }, 'Si è verificato un errore durante il rendering:'),
+                    window.React.createElement('pre', {
+                      style: {
+                        background: '#0f172a',
+                        color: '#fca5a5',
+                        padding: '12px',
+                        borderRadius: '6px',
+                        fontSize: '12px',
+                        overflowX: 'auto',
+                        whiteSpace: 'pre-wrap',
+                        border: '1px solid #334155'
+                      }
+                    }, this.state.error ? (this.state.error.message || String(this.state.error)) : 'Errore sconosciuto'),
+                    window.React.createElement('div', {
+                      style: { fontSize: '12px', color: '#94a3b8', marginTop: '10px' }
+                    }, 'Suggerimento: controlla che tutti i componenti siano esportati correttamente (es. export default function Card() { ... }) e richiamati come <Card /> senza l\\'estensione .tsx.')
+                  );
+                }
+                return this.props.children;
+              };
+            }
+            return ErrorBoundaryClass;
+          })(window.React.Component);
+
+          var appElem = window.React.createElement(ErrorBoundaryClass, null, window.React.createElement(appComponent));
           if (window.ReactDOM.createRoot) {
             window.ReactDOM.createRoot(rootEl).render(appElem);
           } else if (window.ReactDOM.render) {
