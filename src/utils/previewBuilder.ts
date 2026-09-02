@@ -108,11 +108,12 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
 </script>
 `;
 
-    // 6. Global CDN Dependencies (React 18, ReactDOM 18, Tailwind CSS)
+    // 6. Global CDN Dependencies (React 18, ReactDOM 18, Tailwind CSS, Lucide Icons)
     const cdnScripts = `
 <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 `;
 
     // 7. Prepare CSS styles
@@ -165,8 +166,12 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
 
       try {
         const transformed = Babel.transform(code, {
-          presets: ['env', 'react', 'typescript'],
-          filename: jsFile.name
+          presets: [
+            'env',
+            'react',
+            ['typescript', { allExtensions: true, isTSX: true }]
+          ],
+          filename: jsFile.name.endsWith('.tsx') || jsFile.name.endsWith('.ts') ? jsFile.name : `${jsFile.name}.tsx`
         });
 
         const compiledCode = transformed.code || '';
@@ -316,12 +321,46 @@ ${compiledCode}
           get: function(target, prop) {
             if (prop === '__esModule') return true;
             if (prop === 'default') return target;
-            return function GenericIcon(props) {
-              return window.React.createElement('span', {
-                ...props,
-                style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: '1em', minHeight: '1em', ...(props && props.style ? props.style : {}) },
-                title: String(prop)
-              }, '❖');
+            return function LucideIcon(props) {
+              props = props || {};
+              var iconName = String(prop);
+              var kebab = iconName.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+              var iconData = window.lucide && window.lucide.icons && (window.lucide.icons[prop] || window.lucide.icons[kebab] || window.lucide.icons[iconName.toLowerCase()]);
+              
+              if (iconData && iconData[2]) {
+                var children = iconData[2].map(function(child, idx) {
+                  var tag = child[0];
+                  var attrs = Object.assign({ key: idx }, child[1]);
+                  return window.React.createElement(tag, attrs);
+                });
+                var svgProps = Object.assign({
+                  xmlns: 'http://www.w3.org/2000/svg',
+                  width: props.size || 20,
+                  height: props.size || 20,
+                  viewBox: '0 0 24 24',
+                  fill: props.fill || 'none',
+                  stroke: props.stroke || 'currentColor',
+                  strokeWidth: props.strokeWidth || 2,
+                  strokeLinecap: 'round',
+                  strokeLinejoin: 'round'
+                }, props);
+                return window.React.createElement('svg', svgProps, children);
+              }
+
+              return window.React.createElement('svg', Object.assign({
+                xmlns: 'http://www.w3.org/2000/svg',
+                width: props.size || 18,
+                height: props.size || 18,
+                viewBox: '0 0 24 24',
+                fill: 'none',
+                stroke: 'currentColor',
+                strokeWidth: 2,
+                strokeLinecap: 'round',
+                strokeLinejoin: 'round'
+              }, props),
+                window.React.createElement('circle', { cx: 12, cy: 12, r: 10 }),
+                window.React.createElement('path', { d: 'M12 8v4m0 4h.01' })
+              );
             };
           }
         });
@@ -329,7 +368,42 @@ ${compiledCode}
 
       var resolved = window.__resolveModulePath(currentFile, specifier);
       if (!resolved) {
-        throw new Error("Impossibile importare '" + specifier + "' da '" + currentFile + "': modulo non trovato. Verifica il percorso del file.");
+        console.warn("[Modulo virtuale non trovato] '" + specifier + "' (richiesto da '" + (currentFile || 'root') + "'). Creato mock automatico per evitare schermata nera.");
+
+        var makeFallback = function(name) {
+          var dummyFn = function DummyFallbackComponent(props) {
+            return window.React ? window.React.createElement('div', {
+              style: {
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                padding: '4px 8px',
+                margin: '2px',
+                backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                border: '1px dashed #f59e0b',
+                borderRadius: '6px',
+                color: '#d97706',
+                fontSize: '11px',
+                fontFamily: 'monospace'
+              },
+              title: "Modulo non trovato: " + specifier
+            }, '⚠️ ' + name) : null;
+          };
+
+          return new Proxy(dummyFn, {
+            get: function(t, p) {
+              if (p === '__esModule') return true;
+              if (p === 'default') return makeFallback(name);
+              if (p === 'then') return undefined;
+              return makeFallback(String(p));
+            },
+            apply: function() {
+              return makeFallback(name);
+            }
+          });
+        };
+
+        return makeFallback(specifier);
       }
 
       if (window.__moduleCache__[resolved]) {
@@ -408,7 +482,32 @@ ${compiledCode}
       'src/app.tsx', 'src/app.jsx', 'app.tsx', 'app.jsx'
     ];
 
+    // Safe createElement to prevent blank screens when rendering undefined components
+    if (window.React && !window.React.__origCreateElement) {
+      window.React.__origCreateElement = window.React.createElement;
+      window.React.createElement = function(type) {
+        if (type === undefined || type === null) {
+          console.error("Tentativo di renderizzare un componente 'undefined'. Verifica l'export del componente (export default vs named export).");
+          return window.React.__origCreateElement('div', {
+            style: {
+              padding: '12px 16px',
+              margin: '8px 0',
+              border: '1px dashed #ef4444',
+              borderRadius: '8px',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+              color: '#f87171',
+              fontSize: '13px',
+              fontFamily: 'sans-serif'
+            }
+          }, "⚠️ Componente 'undefined': controlla che sia esportato (export default) e che l'import corrisponda.");
+        }
+        return window.React.__origCreateElement.apply(window.React, arguments);
+      };
+    }
+
     var appComponent = null;
+    var lastLoadError = null;
+
     for (var i = 0; i < commonEntries.length; i++) {
       var match = window.__resolveModulePath('', commonEntries[i]);
       if (match && window.__modules__[match]) {
@@ -426,11 +525,57 @@ ${compiledCode}
             }
             if (candidate && !appComponent) {
               appComponent = candidate;
+              break;
             }
           }
         } catch (e) {
+          lastLoadError = e;
           console.error("Errore durante l'inizializzazione di '" + match + "':", e);
         }
+      }
+    }
+
+    // 2b. If no component found in common entries, scan ALL compiled modules!
+    if (!appComponent) {
+      var modKeys = Object.keys(window.__modules__);
+      for (var m = 0; m < modKeys.length; m++) {
+        var modKey = modKeys[m];
+        if (modKey.endsWith('.css') || modKey.endsWith('.json')) continue;
+        try {
+          var exportsObj = window.__createRequire('')(modKey);
+          if (exportsObj) {
+            var comp = exportsObj.default;
+            if (!comp || typeof comp !== 'function') {
+              for (var p in exportsObj) {
+                if (p !== '__esModule' && typeof exportsObj[p] === 'function') {
+                  comp = exportsObj[p];
+                  break;
+                }
+              }
+            }
+            if (comp && typeof comp === 'function') {
+              appComponent = comp;
+              break;
+            }
+          }
+        } catch (err) {
+          lastLoadError = lastLoadError || err;
+        }
+      }
+    }
+
+    // If still no component and an error was captured, display it visually so the screen isn't black
+    if (!appComponent && lastLoadError) {
+      var errorRoot = document.getElementById('root') || document.getElementById('app') || document.body;
+      if (errorRoot) {
+        var errContainer = document.createElement('div');
+        errContainer.innerHTML = '<div style="padding: 20px; margin: 16px; background: #1e1e2e; border: 2px solid #ef4444; border-radius: 10px; color: #f8fafc; font-family: system-ui, sans-serif;">' +
+          '<div style="font-size: 16px; font-weight: bold; color: #f87171; margin-bottom: 8px;">⚠️ Errore di Caricamento Modulo</div>' +
+          '<p style="font-size: 13px; color: #cbd5e1; margin-bottom: 8px;">Si è verificato un errore durante l\\'inizializzazione:</p>' +
+          '<pre style="background: #0f172a; color: #fca5a5; padding: 12px; border-radius: 6px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; border: 1px solid #334155;">' + (lastLoadError.message || String(lastLoadError)) + '</pre>' +
+          '<div style="font-size: 12px; color: #94a3b8; margin-top: 10px;">Suggerimento: controlla i percorsi dei file importati e verifica che tutti i file necessari esistano nel progetto.</div>' +
+        '</div>';
+        errorRoot.appendChild(errContainer);
       }
     }
 
@@ -444,6 +589,7 @@ ${compiledCode}
       }
 
       if (rootEl) {
+        rootEl.style.width = '100%';
         try {
           // React Error Boundary
           var ErrorBoundaryClass = (function(_super) {
