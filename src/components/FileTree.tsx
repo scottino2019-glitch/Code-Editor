@@ -97,6 +97,22 @@ export const FileTree: React.FC<FileTreeProps> = ({
     return root;
   };
 
+  // Helper to read file as text or binary data URL for images
+  const readFileData = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      const isBinaryImage = ext && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'bmp', 'avif'].includes(ext);
+      if (isBinaryImage) {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      } else {
+        file.text().then(resolve).catch(reject);
+      }
+    });
+  };
+
   // Handler for directory / folder upload
   const handleFolderUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFiles = event.target.files;
@@ -117,7 +133,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
       }
 
       try {
-        const content = await file.text();
+        const content = await readFileData(file);
         const path = file.webkitRelativePath || file.name;
         newFiles.push({
           path,
@@ -149,7 +165,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
       if (file.name.startsWith('.')) continue;
 
       try {
-        const content = await file.text();
+        const content = await readFileData(file);
         newFiles.push({
           path: file.name,
           name: file.name,
@@ -205,6 +221,13 @@ export const FileTree: React.FC<FileTreeProps> = ({
       case 'tsx': return 'text-indigo-400';
       case 'json': return 'text-amber-500';
       case 'md': return 'text-purple-400';
+      case 'svg':
+      case 'png':
+      case 'jpg':
+      case 'jpeg':
+      case 'gif':
+      case 'webp':
+      case 'ico': return 'text-pink-400';
       default: return 'text-slate-400';
     }
   };

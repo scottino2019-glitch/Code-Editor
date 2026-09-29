@@ -218,6 +218,8 @@ export default function App() {
       initialContent = `import React from 'react';\n\nexport default function Component() {\n  return (\n    <div>\n      <h3>${name}</h3>\n    </div>\n  );\n}\n`;
     } else if (language === 'json') {
       initialContent = `{\n  "key": "value"\n}\n`;
+    } else if (name.endsWith('.svg')) {
+      initialContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">\n  <circle cx="50" cy="50" r="40" fill="#38bdf8"/>\n</svg>\n`;
     }
 
     const newFile: VirtualFile = {

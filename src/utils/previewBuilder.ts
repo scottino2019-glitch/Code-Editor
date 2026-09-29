@@ -8,6 +8,181 @@ export interface ConsoleMessage {
   timestamp: string;
 }
 
+/**
+ * Normalizes a virtual file path: strips leading slashes, backslashes,
+ * and trims whitespace from individual path segments.
+ */
+function normalizePath(p: string): string {
+  if (!p) return '';
+  const clean = String(p).replace(/\\/g, '/').trim();
+  const segments = clean.split('/').map(s => s.trim()).filter(Boolean);
+  const resolved: string[] = [];
+  for (const seg of segments) {
+    if (seg === '.') continue;
+    if (seg === '..') {
+      if (resolved.length > 0) resolved.pop();
+    } else {
+      resolved.push(seg);
+    }
+  }
+  return resolved.join('/');
+}
+
+/**
+ * Generates an elegant SVG data URL placeholder for missing local images.
+ * This guarantees the UI does not show broken image boxes or 404 network errors.
+ */
+function getPlaceholderDataUrl(name: string): string {
+  const cleanName = name.split('/').pop() || name;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200" viewBox="0 0 320 200">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <rect width="100%" height="100%" fill="url(#bgGrad)" rx="12" stroke="#334155" stroke-width="2"/>
+  <circle cx="160" cy="75" r="26" fill="#38bdf8" opacity="0.15"/>
+  <path d="M148 65 L172 65 M160 55 L160 75 M148 88 L172 88" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="160" y="130" fill="#f1f5f9" font-family="system-ui, -apple-system, sans-serif" font-size="13" font-weight="600" text-anchor="middle">🖼️ ${cleanName}</text>
+  <text x="160" y="152" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="11" text-anchor="middle">Immagine locale collegata</text>
+</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/**
+ * Searches and resolves a virtual file across the workspace.
+ * Handles relative paths, absolute paths, casing differences, and filename-only fallbacks.
+ */
+function resolveVirtualFile(specifier: string, fromPath: string, allFiles: VirtualFile[]): VirtualFile | undefined {
+  if (!specifier) return undefined;
+
+  let clean = String(specifier).replace(/\\/g, '/').trim();
+  clean = clean.replace(/^["']|["']$/g, '');
+  clean = clean.split('?')[0].split('#')[0]; // remove query / hash
+
+  // Remove alias @/ or ~/
+  if (clean.startsWith('@/')) clean = clean.slice(2);
+  else if (clean.startsWith('~/')) clean = clean.slice(2);
+
+  const normalizedTarget = normalizePath(clean);
+  const targetBaseName = (normalizedTarget.split('/').pop() || '').toLowerCase();
+  const targetBaseWithoutExt = targetBaseName.replace(/\.[^.]+$/, '');
+
+  // 1. Direct path matches (exact or normalized)
+  const exactMatch = allFiles.find(f => {
+    const fnNorm = normalizePath(f.path);
+    return fnNorm === normalizedTarget || fnNorm.toLowerCase() === normalizedTarget.toLowerCase();
+  });
+  if (exactMatch) return exactMatch;
+
+  // 2. Relative from fromPath
+  if (fromPath && (clean.startsWith('./') || clean.startsWith('../') || !clean.includes('/'))) {
+    const fromDir = normalizePath(fromPath).split('/').slice(0, -1).join('/');
+    const combined = fromDir ? `${fromDir}/${clean}` : clean;
+    const normCombined = normalizePath(combined);
+    const relMatch = allFiles.find(f => {
+      const fnNorm = normalizePath(f.path);
+      return fnNorm === normCombined || fnNorm.toLowerCase() === normCombined.toLowerCase();
+    });
+    if (relMatch) return relMatch;
+  }
+
+  // 3. Search in src/ or components/ subdirectories
+  const prefixes = ['src/', 'src/components/', 'components/', 'assets/', 'images/', 'public/'];
+  for (const prefix of prefixes) {
+    const candidate = normalizePath(prefix + clean);
+    const m = allFiles.find(f => normalizePath(f.path).toLowerCase() === candidate.toLowerCase());
+    if (m) return m;
+  }
+
+  // 4. Filename exact match (ignoring folder location)
+  const filenameMatch = allFiles.find(f => {
+    const fName = f.name.trim().toLowerCase();
+    return fName === targetBaseName;
+  });
+  if (filenameMatch) return filenameMatch;
+
+  // 5. Filename without extension match
+  const noExtMatch = allFiles.find(f => {
+    const fNameNoExt = f.name.trim().replace(/\.[^.]+$/, '').toLowerCase();
+    return fNameNoExt === targetBaseWithoutExt;
+  });
+  if (noExtMatch) return noExtMatch;
+
+  return undefined;
+}
+
+/**
+ * Resolves an asset specifier (image, svg, etc.) to a usable data URL.
+ */
+function resolveAssetDataUrl(specifier: string, fromPath: string, allFiles: VirtualFile[]): string {
+  if (!specifier) return '';
+  const trimmed = specifier.trim();
+
+  // If already an external URL or data URL, leave as is
+  if (/^(https?:|\/\/|data:)/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const foundFile = resolveVirtualFile(trimmed, fromPath, allFiles);
+  if (foundFile) {
+    const content = foundFile.content;
+    if (content.startsWith('data:')) {
+      return content;
+    }
+    const ext = foundFile.name.split('.').pop()?.toLowerCase();
+    if (ext === 'svg' || content.trim().startsWith('<svg') || content.trim().startsWith('<?xml')) {
+      return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`;
+    }
+    // Binary image data
+    let mime = 'image/png';
+    if (ext === 'jpg' || ext === 'jpeg') mime = 'image/jpeg';
+    else if (ext === 'webp') mime = 'image/webp';
+    else if (ext === 'gif') mime = 'image/gif';
+    else if (ext === 'ico') mime = 'image/x-icon';
+
+    if (/^[A-Za-z0-9+/=]+$/.test(content.trim()) && content.length > 50) {
+      return `data:${mime};base64,${content.trim()}`;
+    }
+    return getPlaceholderDataUrl(foundFile.name);
+  }
+
+  // Return a stylish inline SVG placeholder for missing images so no broken boxes/404s appear
+  return getPlaceholderDataUrl(trimmed);
+}
+
+/**
+ * Inlines @import statements and converts url(...) declarations in CSS.
+ */
+function processCssStyles(cssContent: string, cssFilePath: string, allFiles: VirtualFile[], visited = new Set<string>()): string {
+  if (visited.has(cssFilePath)) return ''; // Prevent cyclic @import
+  visited.add(cssFilePath);
+
+  // 1. Resolve @import statements
+  let processed = cssContent.replace(/@import\s+(?:url\(['"]?([^'")]+)['"]?\)|['"]([^'"]+)['"])\s*;?/gi, (match, url1, url2) => {
+    const importPath = (url1 || url2 || '').trim();
+    if (!importPath || /^(https?:|\/\/)/i.test(importPath)) return match;
+
+    const importedFile = resolveVirtualFile(importPath, cssFilePath, allFiles);
+    if (importedFile && importedFile.name.toLowerCase().endsWith('.css')) {
+      return `\n/* Inlined @import "${importPath}" */\n${processCssStyles(importedFile.content, importedFile.path, allFiles, visited)}\n`;
+    }
+    return `/* @import "${importPath}" non trovato */`;
+  });
+
+  // 2. Resolve url(...) references (images, fonts, assets)
+  processed = processed.replace(/url\(\s*(['"]?)(?!data:)(?!https?:)(?!\/\/)([^'")]+)\1\s*\)/gi, (match, quote, url) => {
+    const cleanUrl = url.trim();
+    if (!cleanUrl || cleanUrl.startsWith('#')) return match; // SVG anchors/fragments
+
+    const resolvedUrl = resolveAssetDataUrl(cleanUrl, cssFilePath, allFiles);
+    return `url("${resolvedUrl}")`;
+  });
+
+  return processed;
+}
+
 export function buildPreviewHtml(files: VirtualFile[]): string {
   try {
     // 1. Find HTML entrypoint, default to index.html or first .html file
@@ -16,17 +191,17 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
       htmlFile = files.find(f => f.name.toLowerCase().endsWith('.html'));
     }
 
-    // 2. Get CSS files
+    // 2. Group files by type
     const cssFiles = files.filter(f => f.name.toLowerCase().endsWith('.css'));
-    
-    // 3. Get JS / JSX / TS / TSX files
     const jsFiles = files.filter(f => {
       const ext = f.name.split('.').pop()?.toLowerCase();
       return ext && ['js', 'jsx', 'ts', 'tsx'].includes(ext);
     });
-
-    // 4. Get JSON files
     const jsonFiles = files.filter(f => f.name.toLowerCase().endsWith('.json'));
+    const assetFiles = files.filter(f => {
+      const ext = f.name.split('.').pop()?.toLowerCase();
+      return ext && ['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'svg', 'bmp', 'avif'].includes(ext);
+    });
 
     // Base HTML content
     let rawHtml = htmlFile ? htmlFile.content : `<!DOCTYPE html>
@@ -53,7 +228,7 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
       }
     }
 
-    // 5. Console Interceptor & Error Catching Script
+    // 3. Console Interceptor & Error Catching Script
     const consoleScript = `
 <script>
 (function() {
@@ -73,7 +248,6 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
       });
 
       const strContent = formattedArgs.join(' ');
-      // Ignora l'avviso informativo standard del CDN di Tailwind (normale nei playground/sandbox)
       if (strContent.includes('cdn.tailwindcss.com should not be used in production')) {
         return;
       }
@@ -108,7 +282,7 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
 </script>
 `;
 
-    // 6. Global CDN Dependencies (React 18, ReactDOM 18, Tailwind CSS, Lucide Icons)
+    // 4. Global CDN Dependencies (React 18, ReactDOM 18, Tailwind CSS, Lucide Icons)
     const cdnScripts = `
 <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
@@ -116,26 +290,74 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 `;
 
-    // 7. Prepare CSS styles
-    let combinedStyles = '';
-    cssFiles.forEach(file => {
-      combinedStyles += `\n/* ${file.path} */\n${file.content}\n`;
-    });
-    const styleTag = `<style id="__playground_styles__">\n${combinedStyles}\n</style>`;
+    // 5. Connect HTML to CSS: Inline all <link rel="stylesheet"> references seamlessly
+    const inlinedCssPaths = new Set<string>();
 
-    if (cssFiles.length > 0) {
-      cssFiles.forEach(cssFile => {
-        const regex = new RegExp(`<link[^>]*href=["'](?:\.\/)?${cssFile.name.replace('.', '\\.')}["'][^>]*>`, 'gi');
-        rawHtml = rawHtml.replace(regex, () => `<!-- Stile integrato: ${cssFile.name} -->`);
-      });
+    rawHtml = rawHtml.replace(/<link\b([^>]*\b(?:rel=["']stylesheet["']|href=["'][^"']+\.css["'])[^>]*)>/gi, (match, attrs) => {
+      const hrefMatch = attrs.match(/\bhref=["']([^"']+)["']/i);
+      if (!hrefMatch) return match;
+      const href = hrefMatch[1].trim();
+
+      if (/^(https?:|\/\/)/i.test(href)) {
+        return match; // Keep external CDN stylesheets
+      }
+
+      const matchingCss = resolveVirtualFile(href, htmlFile ? htmlFile.path : '', files);
+      if (matchingCss && matchingCss.name.toLowerCase().endsWith('.css')) {
+        inlinedCssPaths.add(matchingCss.path);
+        const processed = processCssStyles(matchingCss.content, matchingCss.path, files);
+        return `<style data-source="${matchingCss.path}">\n/* Collegato da HTML: <link rel="stylesheet" href="${href}"> */\n${processed}\n</style>`;
+      }
+
+      // If only 1 CSS file in project, connect it as the main stylesheet fallback
+      if (cssFiles.length === 1 && !inlinedCssPaths.has(cssFiles[0].path)) {
+        inlinedCssPaths.add(cssFiles[0].path);
+        const processed = processCssStyles(cssFiles[0].content, cssFiles[0].path, files);
+        return `<style data-source="${cssFiles[0].path}">\n/* Foglio di stile principale per "${href}" */\n${processed}\n</style>`;
+      }
+
+      return `<!-- [Foglio di stile locale non trovato: ${href}] -->`;
+    });
+
+    // Also include any remaining workspace CSS files (e.g. App.css, styles.css)
+    let remainingCss = '';
+    cssFiles.forEach(file => {
+      if (!inlinedCssPaths.has(file.path)) {
+        const processed = processCssStyles(file.content, file.path, files);
+        remainingCss += `\n/* Stile workspace: ${file.path} */\n${processed}\n`;
+      }
+    });
+
+    if (remainingCss.trim()) {
+      const styleBlock = `<style id="__playground_workspace_styles__">\n${remainingCss}\n</style>`;
       if (rawHtml.includes('</head>')) {
-        rawHtml = rawHtml.replace('</head>', () => `${styleTag}\n</head>`);
+        rawHtml = rawHtml.replace('</head>', () => `${styleBlock}\n</head>`);
       } else {
-        rawHtml = styleTag + '\n' + rawHtml;
+        rawHtml = styleBlock + '\n' + rawHtml;
       }
     }
 
-    // 8. Extract local <script src="..."> tags and inline scripts from HTML
+    // 6. Connect HTML to Images: Resolve <img src="...">, <source srcset="...">, <link rel="icon">
+    rawHtml = rawHtml.replace(/<img\b([^>]*\bsrc=["'])(?!data:)(?!https?:)(?!\/\/)([^"']+)(["'][^>]*)>/gi, (match, prefix, src, suffix) => {
+      const resolved = resolveAssetDataUrl(src, htmlFile ? htmlFile.path : '', files);
+      return `${prefix}${resolved}${suffix}`;
+    });
+
+    rawHtml = rawHtml.replace(/<source\b([^>]*\bsrcset=["'])(?!data:)(?!https?:)(?!\/\/)([^"']+)(["'][^>]*)>/gi, (match, prefix, srcset, suffix) => {
+      const resolved = resolveAssetDataUrl(srcset, htmlFile ? htmlFile.path : '', files);
+      return `${prefix}${resolved}${suffix}`;
+    });
+
+    rawHtml = rawHtml.replace(/<link\b([^>]*\b(?:rel=["'](?:icon|shortcut icon)["']|href=["'][^"']+\.(?:png|jpg|jpeg|ico|svg)["'])[^>]*)>/gi, (match, attrs) => {
+      const hrefMatch = attrs.match(/\bhref=["']([^"']+)["']/i);
+      if (hrefMatch && !/^(https?:|\/\/|data:)/i.test(hrefMatch[1])) {
+        const resolved = resolveAssetDataUrl(hrefMatch[1], htmlFile ? htmlFile.path : '', files);
+        return match.replace(hrefMatch[0], `href="${resolved}"`);
+      }
+      return match;
+    });
+
+    // 7. Extract local <script src="..."> tags and transpile inline scripts from HTML
     const localScriptEntries: string[] = [];
     rawHtml = rawHtml.replace(/<script\b([^>]*)src=["']([^"']+)["']([^>]*)>([\s\S]*?)<\/script>/gi, (match, before, src, after) => {
       if (/^(https?:|\/\/)/i.test(src)) {
@@ -145,49 +367,94 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
       return `<!-- [Script eseguito dal modulo virtuale: ${src}] -->`;
     });
 
-    // Also transpile any inline <script>...</script> tags in HTML that might contain import/export or JSX
+    // Transpile any inline <script>...</script> tags in HTML that might contain import/export or JSX
     rawHtml = rawHtml.replace(/<script\b(?![^>]*\bsrc=)([^>]*)>([\s\S]*?)<\/script>/gi, (match, attrs, inlineCode) => {
-      // If it's a known non-JS script (like JSON or template), leave it untouched
       if (/type=["'](application\/json|text\/html|text\/template)["']/i.test(attrs)) {
         return match;
       }
-      // If inline script contains import or export statements, transpile it to avoid "Cannot use import statement outside a module"
-      if (/\b(import|export)\b/.test(inlineCode)) {
+      if (/\b(import|export)\b/.test(inlineCode) || /<[A-Za-z0-9]/.test(inlineCode)) {
         try {
           const transformedInline = Babel.transform(inlineCode, {
             presets: [
               ['env', { modules: 'cjs' }],
               'react',
               'typescript'
-            ]
+            ],
+            filename: 'inline.tsx'
           });
           const wrapped = `(function(require, module, exports) {\n${transformedInline.code}\n})(window.__createRequire ? window.__createRequire('') : function(m){ return window[m]; }, { exports: {} }, {});`;
           return `<script ${attrs}>\n${wrapped}\n</script>`;
         } catch (e) {
-          // Fallback to type="module" so browser module loader can handle it if possible
           return `<script type="module" ${attrs}>\n${inlineCode}\n</script>`;
         }
       }
       return match;
     });
 
-    // 9. Transpile all JS / TS / JSX / TSX files with Babel and build virtual modules dictionary
+    // 8. Transpile all JS / TS / JSX / TSX files with Babel and build virtual modules dictionary
     const transpileErrors: string[] = [];
     const moduleDefs: string[] = [];
     const rawFileMap: Record<string, string> = {};
 
-    jsonFiles.forEach(jf => {
-      rawFileMap[jf.path] = jf.content;
-      if (!rawFileMap[jf.name]) rawFileMap[jf.name] = jf.content;
+    // Populate raw files
+    files.forEach(f => {
+      rawFileMap[f.path] = f.content;
+      rawFileMap[f.name] = f.content;
+      const norm = normalizePath(f.path);
+      if (norm) rawFileMap[norm] = f.content;
     });
 
+    // Register Asset & Image Virtual Modules
+    assetFiles.forEach(asset => {
+      const dataUrl = resolveAssetDataUrl(asset.name, asset.path, files);
+      const escapedDataUrl = JSON.stringify(dataUrl);
+      const isSvg = asset.name.toLowerCase().endsWith('.svg');
+
+      const assetModuleCode = isSvg ? `
+  var SvgComp = function(props) {
+    props = props || {};
+    var p = Object.assign({
+      src: ${escapedDataUrl},
+      alt: ${JSON.stringify(asset.name)}
+    }, props);
+    return window.React ? window.React.createElement('img', p) : null;
+  };
+  SvgComp.default = ${escapedDataUrl};
+  SvgComp.ReactComponent = SvgComp;
+  SvgComp.toString = function() { return ${escapedDataUrl}; };
+  SvgComp.valueOf = function() { return ${escapedDataUrl}; };
+  module.exports = SvgComp;
+` : `
+  var assetVal = ${escapedDataUrl};
+  var AssetExport = {
+    default: assetVal,
+    __esModule: true,
+    toString: function() { return assetVal; },
+    valueOf: function() { return assetVal; }
+  };
+  module.exports = AssetExport;
+`;
+
+      moduleDefs.push(`
+// --- Asset Module: ${asset.path} ---
+(function() {
+  window.__modules__ = window.__modules__ || {};
+  var modFn = function(require, module, exports) {
+${assetModuleCode}
+  };
+  window.__modules__[${JSON.stringify(asset.path)}] = modFn;
+  window.__modules__[${JSON.stringify(asset.name)}] = modFn;
+  var normP = ${JSON.stringify(normalizePath(asset.path))};
+  if (normP) window.__modules__[normP] = modFn;
+})();
+`);
+    });
+
+    // Transpile JS / TS / JSX / TSX
     jsFiles.forEach(jsFile => {
       let code = jsFile.content;
 
-      // Smart JSX Fix:
-      // If user wrote <ComponentName.tsx ... /> or <ComponentName.jsx ... /> in JSX,
-      // in React this evaluates to React.createElement(ComponentName.tsx) which is undefined.
-      // Auto-correct to <ComponentName ... />
+      // Smart JSX Fix: <Component.tsx ... /> -> <Component ... />
       code = code.replace(/<(\/?)\s*([A-Za-z0-9_$]+)\.(?:tsx|jsx|ts|js)\b/gi, '<$1$2');
 
       try {
@@ -197,12 +464,13 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
             'react',
             'typescript'
           ],
-          filename: jsFile.name.endsWith('.tsx') || jsFile.name.endsWith('.ts') ? jsFile.name : `${jsFile.name}.tsx`
+          filename: 'component.tsx' // Force TSX so Babel handles both TS types and JSX seamlessly
         });
 
         const compiledCode = transformed.code || '';
         const escapedPath = JSON.stringify(jsFile.path);
         const escapedName = JSON.stringify(jsFile.name);
+        const normalizedP = JSON.stringify(normalizePath(jsFile.path));
 
         moduleDefs.push(`
 // --- Module: ${jsFile.path} ---
@@ -217,8 +485,9 @@ ${compiledCode}
     }
   };
   window.__modules__[${escapedPath}] = modFn;
-  if (!window.__modules__[${escapedName}]) {
-    window.__modules__[${escapedName}] = modFn;
+  window.__modules__[${escapedName}] = modFn;
+  if (${normalizedP}) {
+    window.__modules__[${normalizedP}] = modFn;
   }
 })();
 `);
@@ -227,7 +496,7 @@ ${compiledCode}
       }
     });
 
-    // 10. Virtual Module Loader & Auto-Mount Runtime
+    // 9. Virtual Module Loader & Auto-Mount Runtime
     const runtimeScript = `
 <script id="__playground_bundler_runtime__">
 (function() {
@@ -236,22 +505,44 @@ ${compiledCode}
   window.__rawFiles__ = ${JSON.stringify(rawFileMap)};
   window.__scriptEntries__ = ${JSON.stringify(localScriptEntries)};
 
-  function norm(p) {
-    if (!p) return '';
-    var s = String(p).replace(/\\\\/g, '/');
-    while (s.startsWith('./')) s = s.slice(2);
-    while (s.startsWith('/')) s = s.slice(1);
-    return s;
+  function cleanStr(s) {
+    if (!s) return '';
+    var str = String(s).replace(/\\\\/g, '/').trim();
+    str = str.replace(/^["']|["']$/g, '');
+    str = str.split('?')[0].split('#')[0];
+    if (str.startsWith('@/')) str = str.slice(2);
+    else if (str.startsWith('~/')) str = str.slice(2);
+    return str;
   }
 
-  // Module path resolver
+  function norm(p) {
+    if (!p) return '';
+    var s = cleanStr(p);
+    var parts = s.split('/').map(function(seg) { return seg.trim(); }).filter(Boolean);
+    var resolved = [];
+    for (var i = 0; i < parts.length; i++) {
+      var part = parts[i];
+      if (part === '.') continue;
+      if (part === '..') {
+        if (resolved.length > 0) resolved.pop();
+      } else {
+        resolved.push(part);
+      }
+    }
+    return resolved.join('/');
+  }
+
+  // Enhanced Module Path Resolver
   window.__resolveModulePath = function(currentFile, specifier) {
     currentFile = norm(currentFile);
-    specifier = String(specifier).replace(/\\\\/g, '/');
+    var cleanSpecifier = cleanStr(specifier);
+    if (!cleanSpecifier) return null;
 
     var available = Object.keys(window.__modules__).concat(Object.keys(window.__rawFiles__));
+
     function findMatch(target) {
       var nTarget = norm(target);
+      if (!nTarget) return null;
       for (var i = 0; i < available.length; i++) {
         if (norm(available[i]) === nTarget) return available[i];
       }
@@ -261,17 +552,21 @@ ${compiledCode}
       return null;
     }
 
-    var exts = ['', '.tsx', '.ts', '.jsx', '.js', '.json', '/index.tsx', '/index.ts', '/index.jsx', '/index.js'];
+    var exts = [
+      '', '.tsx', '.ts', '.jsx', '.js', '.json',
+      '.svg', '.png', '.jpg', '.jpeg', '.webp', '.css',
+      '/index.tsx', '/index.ts', '/index.jsx', '/index.js'
+    ];
 
     // 1. Relative specifier (./ or ../)
     if (specifier.startsWith('./') || specifier.startsWith('../')) {
       var currentParts = currentFile ? currentFile.split('/').slice(0, -1) : [];
-      var specParts = specifier.split('/');
+      var specParts = cleanSpecifier.split('/');
       for (var i = 0; i < specParts.length; i++) {
-        var part = specParts[i];
+        var part = specParts[i].trim();
         if (part === '.' || part === '') continue;
         if (part === '..') {
-          currentParts.pop();
+          if (currentParts.length > 0) currentParts.pop();
         } else {
           currentParts.push(part);
         }
@@ -283,37 +578,135 @@ ${compiledCode}
       }
     }
 
-    // 2. Absolute / project specifier
+    // 2. Absolute / project specifier (including @/ or ~/ alias)
     for (var j = 0; j < exts.length; j++) {
-      var m = findMatch(specifier + exts[j]);
+      var m = findMatch(cleanSpecifier + exts[j]);
       if (m) return m;
     }
 
-    // 3. Search in current directory even without ./ prefix
+    // 3. Search in caller's directory even if missing ./
     if (currentFile && !specifier.startsWith('.')) {
       var currentDir = currentFile.split('/').slice(0, -1).join('/');
       if (currentDir) {
         for (var j = 0; j < exts.length; j++) {
-          var m = findMatch(currentDir + '/' + specifier + exts[j]);
+          var m = findMatch(currentDir + '/' + cleanSpecifier + exts[j]);
           if (m) return m;
         }
       }
     }
 
-    // 4. Fuzzy fallback: match by filename anywhere in project
-    var baseName = specifier.split('/').pop() || '';
+    // 4. Search in common folders (src/, src/components/, components/)
+    var commonPrefixes = ['src/', 'src/components/', 'components/', 'assets/'];
+    for (var p = 0; p < commonPrefixes.length; p++) {
+      for (var j = 0; j < exts.length; j++) {
+        var m = findMatch(commonPrefixes[p] + cleanSpecifier + exts[j]);
+        if (m) return m;
+      }
+    }
+
+    // 5. Global Fuzzy fallback: match by base filename anywhere in workspace
+    var baseName = (cleanSpecifier.split('/').pop() || '').trim();
+    var baseWithoutExt = baseName.replace(/\\.[^.]+$/, '');
     if (baseName) {
       for (var j = 0; j < exts.length; j++) {
         var target = (baseName + exts[j]).toLowerCase();
         for (var i = 0; i < available.length; i++) {
-          var fn = (available[i].split('/').pop() || '').toLowerCase();
+          var fn = (available[i].split('/').pop() || '').trim().toLowerCase();
           if (fn === target) return available[i];
         }
+      }
+      // Also match without extension
+      for (var i = 0; i < available.length; i++) {
+        var fn = (available[i].split('/').pop() || '').trim().toLowerCase();
+        var fnNoExt = fn.replace(/\\.[^.]+$/, '');
+        if (fnNoExt === baseWithoutExt.toLowerCase()) return available[i];
       }
     }
 
     return null;
   };
+
+  // Smart Module Proxy to bridge named vs default export mismatches seamlessly
+  function createModuleProxy(rawExports, modulePath) {
+    if (!rawExports || (typeof rawExports !== 'object' && typeof rawExports !== 'function')) {
+      return rawExports;
+    }
+
+    // 1. Auto-bridge default export if missing
+    if (rawExports.default === undefined) {
+      if (typeof rawExports === 'function') {
+        rawExports.default = rawExports;
+      } else {
+        var keys = Object.keys(rawExports).filter(function(k) { return k !== '__esModule'; });
+        var modBase = (modulePath.split('/').pop() || '').split('.')[0].toLowerCase().trim();
+        var foundKey = null;
+
+        for (var k = 0; k < keys.length; k++) {
+          if (keys[k].toLowerCase().trim() === modBase && typeof rawExports[keys[k]] === 'function') {
+            foundKey = keys[k];
+            break;
+          }
+        }
+        if (!foundKey && keys.length === 1 && typeof rawExports[keys[0]] === 'function') {
+          foundKey = keys[0];
+        }
+        if (!foundKey) {
+          for (var k = 0; k < keys.length; k++) {
+            if (typeof rawExports[keys[k]] === 'function') {
+              foundKey = keys[k];
+              break;
+            }
+          }
+        }
+        if (foundKey) {
+          rawExports.default = rawExports[foundKey];
+        }
+      }
+    }
+
+    // 2. Wrap in Proxy so named imports (e.g. import { Header } from './Header')
+    // can fallback to default export or case-insensitive matching
+    return new Proxy(rawExports, {
+      get: function(target, prop) {
+        if (prop === '__esModule') return target.__esModule !== undefined ? target.__esModule : true;
+        if (prop in target) return target[prop];
+
+        // Case-insensitive & trimmed property lookup
+        var propStr = String(prop).toLowerCase().trim();
+        for (var key in target) {
+          if (key.toLowerCase().trim() === propStr) {
+            return target[key];
+          }
+        }
+
+        // If named import requested, but module only exported default:
+        if (target.default) {
+          if (typeof target.default === 'function') {
+            var defName = (target.default.name || '').toLowerCase().trim();
+            var modBase = (modulePath.split('/').pop() || '').split('.')[0].toLowerCase().trim();
+            var remainingKeys = Object.keys(target).filter(function(x) { return x !== '__esModule' && x !== 'default'; });
+            if (defName === propStr || modBase === propStr || remainingKeys.length === 0) {
+              return target.default;
+            }
+          }
+          if (typeof target.default === 'object' && target.default !== null && prop in target.default) {
+            return target.default[prop];
+          }
+        }
+
+        // If default requested, find any exported component function
+        if (prop === 'default') {
+          for (var key in target) {
+            if (key !== '__esModule' && typeof target[key] === 'function') {
+              return target[key];
+            }
+          }
+        }
+
+        return undefined;
+      }
+    });
+  }
 
   // Create scoped require function
   window.__createRequire = function(currentFile) {
@@ -341,7 +734,7 @@ ${compiledCode}
         };
       }
       if (specifier.endsWith('.css')) {
-        return {};
+        return {}; // CSS imported in JS is bundled globally
       }
       if (specifier === 'lucide-react') {
         return new Proxy({}, {
@@ -395,7 +788,7 @@ ${compiledCode}
 
       var resolved = window.__resolveModulePath(currentFile, specifier);
       if (!resolved) {
-        console.warn("[Modulo virtuale non trovato] '" + specifier + "' (richiesto da '" + (currentFile || 'root') + "'). Creato mock automatico per evitare schermata nera.");
+        console.warn("[Modulo virtuale non trovato] '" + specifier + "' (richiesto da '" + (currentFile || 'root') + "').");
 
         var makeFallback = function(name) {
           var dummyFn = function DummyFallbackComponent(props) {
@@ -464,23 +857,8 @@ ${compiledCode}
       window.__moduleCache__[resolved] = moduleObj;
       fn(window.__createRequire(resolved), moduleObj, moduleObj.exports);
 
-      // Auto-bridge default export if user exported a named component or default is missing
-      if (moduleObj.exports && typeof moduleObj.exports === 'object') {
-        if (!moduleObj.exports.default) {
-          var keys = Object.keys(moduleObj.exports).filter(function(k) { return k !== '__esModule'; });
-          if (keys.length === 1 && typeof moduleObj.exports[keys[0]] === 'function') {
-            moduleObj.exports.default = moduleObj.exports[keys[0]];
-          } else if (keys.length > 1) {
-            var fnName = (resolved.split('/').pop() || '').split('.')[0];
-            for (var k = 0; k < keys.length; k++) {
-              if (keys[k].toLowerCase() === fnName.toLowerCase() && typeof moduleObj.exports[keys[k]] === 'function') {
-                moduleObj.exports.default = moduleObj.exports[keys[k]];
-                break;
-              }
-            }
-          }
-        }
-      }
+      // Auto-bridge and wrap in resilient Proxy
+      moduleObj.exports = createModuleProxy(moduleObj.exports, resolved);
 
       return moduleObj.exports;
     };
@@ -503,10 +881,10 @@ ${compiledCode}
 
     // 2. Discover React entry points (e.g. App.tsx, src/App.tsx, app.tsx, main.tsx)
     var commonEntries = [
-      'src/main.tsx', 'src/main.jsx', 'main.tsx', 'main.jsx',
-      'src/index.tsx', 'src/index.jsx', 'index.tsx', 'index.jsx',
       'src/App.tsx', 'src/App.jsx', 'App.tsx', 'App.jsx',
-      'src/app.tsx', 'src/app.jsx', 'app.tsx', 'app.jsx'
+      'src/app.tsx', 'src/app.jsx', 'app.tsx', 'app.jsx',
+      'src/main.tsx', 'src/main.jsx', 'main.tsx', 'main.jsx',
+      'src/index.tsx', 'src/index.jsx', 'index.tsx', 'index.jsx'
     ];
 
     // Safe createElement to prevent blank screens when rendering undefined components
@@ -526,7 +904,7 @@ ${compiledCode}
               fontSize: '13px',
               fontFamily: 'sans-serif'
             }
-          }, "⚠️ Componente 'undefined': controlla che sia esportato (export default) e che l'import corrisponda.");
+          }, "⚠️ Componente non trovato o non esportato correttamente. Controlla il nome del componente.");
         }
         return window.React.__origCreateElement.apply(window.React, arguments);
       };
@@ -567,7 +945,7 @@ ${compiledCode}
       var modKeys = Object.keys(window.__modules__);
       for (var m = 0; m < modKeys.length; m++) {
         var modKey = modKeys[m];
-        if (modKey.endsWith('.css') || modKey.endsWith('.json')) continue;
+        if (modKey.endsWith('.css') || modKey.endsWith('.json') || modKey.endsWith('.svg') || modKey.endsWith('.png') || modKey.endsWith('.jpg')) continue;
         try {
           var exportsObj = window.__createRequire('')(modKey);
           if (exportsObj) {
@@ -591,7 +969,7 @@ ${compiledCode}
       }
     }
 
-    // If still no component and an error was captured, display it visually so the screen isn't black
+    // Display error box if component failed to load
     if (!appComponent && lastLoadError) {
       var errorRoot = document.getElementById('root') || document.getElementById('app') || document.body;
       if (errorRoot) {
@@ -600,7 +978,6 @@ ${compiledCode}
           '<div style="font-size: 16px; font-weight: bold; color: #f87171; margin-bottom: 8px;">⚠️ Errore di Caricamento Modulo</div>' +
           '<p style="font-size: 13px; color: #cbd5e1; margin-bottom: 8px;">Si è verificato un errore durante l\\'inizializzazione:</p>' +
           '<pre style="background: #0f172a; color: #fca5a5; padding: 12px; border-radius: 6px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; border: 1px solid #334155;">' + (lastLoadError.message || String(lastLoadError)) + '</pre>' +
-          '<div style="font-size: 12px; color: #94a3b8; margin-top: 10px;">Suggerimento: controlla i percorsi dei file importati e verifica che tutti i file necessari esistano nel progetto.</div>' +
         '</div>';
         errorRoot.appendChild(errContainer);
       }
@@ -649,9 +1026,6 @@ ${compiledCode}
                     window.React.createElement('div', {
                       style: { display: 'flex', alignItems: 'center', gap: '8px', color: '#f87171', fontWeight: 'bold', fontSize: '16px', marginBottom: '8px' }
                     }, '⚠️ Errore nel Componente React'),
-                    window.React.createElement('div', {
-                      style: { fontSize: '13px', color: '#cbd5e1', marginBottom: '12px' }
-                    }, 'Si è verificato un errore durante il rendering:'),
                     window.React.createElement('pre', {
                       style: {
                         background: '#0f172a',
@@ -663,10 +1037,7 @@ ${compiledCode}
                         whiteSpace: 'pre-wrap',
                         border: '1px solid #334155'
                       }
-                    }, this.state.error ? (this.state.error.message || String(this.state.error)) : 'Errore sconosciuto'),
-                    window.React.createElement('div', {
-                      style: { fontSize: '12px', color: '#94a3b8', marginTop: '10px' }
-                    }, 'Suggerimento: controlla che tutti i componenti siano esportati correttamente (es. export default function Card() { ... }) e richiamati come <Card /> senza l\\'estensione .tsx.')
+                    }, this.state.error ? (this.state.error.message || String(this.state.error)) : 'Errore sconosciuto')
                   );
                 }
                 return this.props.children;
@@ -697,14 +1068,14 @@ ${compiledCode}
 </script>
 `;
 
-    // 11. Combine all compiled modules
+    // 10. Combine all compiled modules
     const modulesBundle = `
 <script id="__playground_modules__">
 ${moduleDefs.join('\n')}
 </script>
 `;
 
-    // 12. Inject into HTML document
+    // 11. Inject into HTML document
     if (rawHtml.includes('<head>')) {
       rawHtml = rawHtml.replace('<head>', () => `<head>\n${consoleScript}\n${cdnScripts}`);
     } else {
@@ -725,7 +1096,7 @@ ${moduleDefs.join('\n')}
       rawHtml += scriptsBlock;
     }
 
-    // 13. If syntax/transpile errors occurred, show error banner
+    // 12. If syntax/transpile errors occurred, show error banner
     if (transpileErrors.length > 0) {
       const errorHtml = `
         <div style="background:#450a0a; color:#fca5a5; padding:12px; border-bottom:2px solid #ef4444; font-family:monospace; font-size:12px; z-index:9999; position:relative;">

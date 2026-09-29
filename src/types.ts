@@ -31,6 +31,15 @@ export const getLanguageFromExtension = (fileName: string): string => {
       return 'markdown';
     case 'svg':
       return 'xml';
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'gif':
+    case 'webp':
+    case 'ico':
+    case 'bmp':
+    case 'avif':
+      return 'image';
     default:
       return 'plaintext';
   }
