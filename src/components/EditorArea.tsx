@@ -1,7 +1,8 @@
-import React, { useRef } from 'react';
+import React, { useRef, useEffect } from 'react';
 import Editor, { OnMount } from '@monaco-editor/react';
 
 interface EditorAreaProps {
+  filePath: string;
   value: string;
   language: string;
   onChange: (newValue: string | undefined) => void;
@@ -12,6 +13,7 @@ interface EditorAreaProps {
 }
 
 export const EditorArea: React.FC<EditorAreaProps> = ({
+  filePath,
   value,
   language,
   onChange,
@@ -21,6 +23,35 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
   onEditorReady,
 }) => {
   const editorRef = useRef<any>(null);
+  const isInternalChangeRef = useRef<boolean>(false);
+  const currentPathRef = useRef<string>(filePath);
+
+  useEffect(() => {
+    currentPathRef.current = filePath;
+  }, [filePath]);
+
+  // Handle external updates to value (e.g. Paste Modal, Reset, External Upload)
+  // When user is typing inside Monaco, isInternalChangeRef is true, so we NEVER overwrite Monaco!
+  useEffect(() => {
+    if (isInternalChangeRef.current) {
+      isInternalChangeRef.current = false;
+      return;
+    }
+
+    if (editorRef.current) {
+      const model = editorRef.current.getModel();
+      if (model && model.getValue() !== value) {
+        // Value changed from an outside action (Paste modal, reset, etc.)
+        const pos = editorRef.current.getPosition();
+        model.setValue(value || '');
+        if (pos) {
+          try {
+            editorRef.current.setPosition(pos);
+          } catch (e) {}
+        }
+      }
+    }
+  }, [value, filePath]);
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
@@ -61,6 +92,11 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
     });
   };
 
+  const handleEditorChange = (newVal: string | undefined) => {
+    isInternalChangeRef.current = true;
+    onChange(newVal);
+  };
+
   if (language === 'image') {
     const isDataUrl = value && value.startsWith('data:image/');
     return (
@@ -93,15 +129,19 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
     );
   }
 
+  // Generate unique model URI for each file
+  const modelPath = 'file:///' + (filePath || 'untitled.txt').replace(/^\/+/, '');
+
   return (
     <div className="flex-1 w-full h-full relative bg-[#1e1e1e]">
       <Editor
         height="100%"
         width="100%"
-        language={language}
+        path={modelPath}
+        defaultValue={value}
+        defaultLanguage={language}
         theme="vs-dark"
-        value={value}
-        onChange={onChange}
+        onChange={handleEditorChange}
         onMount={handleEditorDidMount}
         loading={
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0F172A] text-slate-400 gap-3">
@@ -123,13 +163,18 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
           },
           automaticLayout: true,
           cursorBlinking: 'smooth',
-          cursorSmoothCaretAnimation: 'on',
+          cursorSmoothCaretAnimation: 'off', // 'off' prevents cursor jumping/gliding artifacts
+          smoothScrolling: true,
           padding: {
             top: 12,
             bottom: 12
           },
           renderWhitespace: 'selection',
           tabSize: 2,
+          quickSuggestions: true,
+          suggestOnTriggerCharacters: true,
+          autoClosingBrackets: 'languageDefined',
+          autoClosingQuotes: 'languageDefined',
         }}
       />
     </div>

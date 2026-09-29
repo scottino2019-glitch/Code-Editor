@@ -8,6 +8,51 @@ export interface ConsoleMessage {
   timestamp: string;
 }
 
+// -------------------------------------------------------------
+// 1. Loop Protection Plugin to prevent browser freeze on infinite loops
+// -------------------------------------------------------------
+try {
+  if (typeof Babel.registerPlugin === 'function') {
+    Babel.registerPlugin('loop-protection', function loopProtectionPlugin({ types: t }: any) {
+      return {
+        visitor: {
+          'WhileStatement|ForStatement|DoWhileStatement'(path: any) {
+            const loopId = path.scope.generateUidIdentifier('loopGuard');
+            const initGuard = t.variableDeclaration('let', [
+              t.variableDeclarator(loopId, t.numericLiteral(0))
+            ]);
+            const checkGuard = t.ifStatement(
+              t.binaryExpression('>', t.updateExpression('++', loopId, false), t.numericLiteral(50000)),
+              t.throwStatement(t.newExpression(t.identifier('Error'), [
+                t.stringLiteral('Possibile ciclo infinito interrotto automaticamente per proteggere l\'editor!')
+              ]))
+            );
+            path.insertBefore(initGuard);
+            if (t.isBlockStatement(path.node.body)) {
+              path.node.body.body.unshift(checkGuard);
+            } else {
+              path.node.body = t.blockStatement([checkGuard, path.node.body]);
+            }
+          }
+        }
+      };
+    });
+  }
+} catch (e) {
+  // Plugin might already be registered
+}
+
+// -------------------------------------------------------------
+// 2. High-Speed Transpilation Cache
+// -------------------------------------------------------------
+interface CachedTranspile {
+  content: string;
+  compiledCode: string;
+  error?: string;
+}
+
+const transpileCache = new Map<string, CachedTranspile>();
+
 /**
  * Normalizes a virtual file path: strips leading slashes, backslashes,
  * and trims whitespace from individual path segments.
@@ -376,7 +421,11 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
         try {
           const transformedInline = Babel.transform(inlineCode, {
             presets: [
-              ['env', { modules: 'cjs' }],
+              ['env', {
+                targets: { chrome: '100', safari: '15', firefox: '100', edge: '100' },
+                modules: 'cjs',
+                loose: true
+              }],
               'react',
               'typescript'
             ],
@@ -450,29 +499,67 @@ ${assetModuleCode}
 `);
     });
 
-    // Transpile JS / TS / JSX / TSX
+    // Transpile JS / TS / JSX / TSX with high-performance caching & modern targets
+    const babelPlugins: string[] = [];
+    if (Babel.availablePlugins && Babel.availablePlugins['loop-protection']) {
+      babelPlugins.push('loop-protection');
+    }
+
     jsFiles.forEach(jsFile => {
-      let code = jsFile.content;
+      const cacheKey = jsFile.path || jsFile.name;
+      const cached = transpileCache.get(cacheKey);
 
-      // Smart JSX Fix: <Component.tsx ... /> -> <Component ... />
-      code = code.replace(/<(\/?)\s*([A-Za-z0-9_$]+)\.(?:tsx|jsx|ts|js)\b/gi, '<$1$2');
+      let compiledCode = '';
 
-      try {
-        const transformed = Babel.transform(code, {
-          presets: [
-            ['env', { modules: 'cjs' }],
-            'react',
-            'typescript'
-          ],
-          filename: 'component.tsx' // Force TSX so Babel handles both TS types and JSX seamlessly
-        });
+      if (cached && cached.content === jsFile.content) {
+        if (cached.error) {
+          transpileErrors.push(cached.error);
+          return;
+        }
+        compiledCode = cached.compiledCode;
+      } else {
+        let code = jsFile.content;
 
-        const compiledCode = transformed.code || '';
-        const escapedPath = JSON.stringify(jsFile.path);
-        const escapedName = JSON.stringify(jsFile.name);
-        const normalizedP = JSON.stringify(normalizePath(jsFile.path));
+        // Smart JSX Fix: <Component.tsx ... /> -> <Component ... />
+        code = code.replace(/<(\/?)\s*([A-Za-z0-9_$]+)\.(?:tsx|jsx|ts|js)\b/gi, '<$1$2');
 
-        moduleDefs.push(`
+        try {
+          const transformed = Babel.transform(code, {
+            presets: [
+              ['env', {
+                targets: { chrome: '100', safari: '15', firefox: '100', edge: '100' },
+                modules: 'cjs',
+                loose: true
+              }],
+              'react',
+              'typescript'
+            ],
+            plugins: babelPlugins,
+            filename: jsFile.name.endsWith('.tsx') || jsFile.name.endsWith('.ts') ? jsFile.name : 'component.tsx'
+          });
+
+          compiledCode = transformed.code || '';
+          transpileCache.set(cacheKey, {
+            content: jsFile.content,
+            compiledCode
+          });
+        } catch (err: any) {
+          const errMsg = `[${jsFile.path}] Sintassi non valida: ${err?.message || err}`;
+          transpileCache.set(cacheKey, {
+            content: jsFile.content,
+            compiledCode: '',
+            error: errMsg
+          });
+          transpileErrors.push(errMsg);
+          return;
+        }
+      }
+
+      const escapedPath = JSON.stringify(jsFile.path);
+      const escapedName = JSON.stringify(jsFile.name);
+      const normalizedP = JSON.stringify(normalizePath(jsFile.path));
+
+      moduleDefs.push(`
 // --- Module: ${jsFile.path} ---
 (function() {
   window.__modules__ = window.__modules__ || {};
@@ -491,9 +578,6 @@ ${compiledCode}
   }
 })();
 `);
-      } catch (err: any) {
-        transpileErrors.push(`[${jsFile.path}] Sintassi non valida: ${err?.message || err}`);
-      }
     });
 
     // 9. Virtual Module Loader & Auto-Mount Runtime
@@ -665,10 +749,17 @@ ${compiledCode}
     }
 
     // 2. Wrap in Proxy so named imports (e.g. import { Header } from './Header')
-    // can fallback to default export or case-insensitive matching
+    // can fallback safely WITHOUT hijacking React internal properties, thenables or symbols
     return new Proxy(rawExports, {
       get: function(target, prop) {
+        if (typeof prop === 'symbol') return target[prop];
         if (prop === '__esModule') return target.__esModule !== undefined ? target.__esModule : true;
+        // Never return a function for 'then' - avoids infinite Promise / Suspense recursion
+        if (prop === 'then') return undefined;
+        // Never hijack React / JS lifecycle internals
+        if (prop === '$$typeof' || prop === 'defaultProps' || prop === 'propTypes' || prop === 'contextTypes' || prop === 'childContextTypes' || prop === 'getDerivedStateFromProps' || prop === 'getDerivedStateFromError' || prop === 'prototype' || prop === 'displayName') {
+          return target[prop];
+        }
         if (prop in target) return target[prop];
 
         // Case-insensitive & trimmed property lookup
@@ -679,13 +770,12 @@ ${compiledCode}
           }
         }
 
-        // If named import requested, but module only exported default:
+        // If named import requested, only fallback to target.default IF it matches component name or module name
         if (target.default) {
           if (typeof target.default === 'function') {
             var defName = (target.default.name || '').toLowerCase().trim();
             var modBase = (modulePath.split('/').pop() || '').split('.')[0].toLowerCase().trim();
-            var remainingKeys = Object.keys(target).filter(function(x) { return x !== '__esModule' && x !== 'default'; });
-            if (defName === propStr || modBase === propStr || remainingKeys.length === 0) {
+            if (defName === propStr || modBase === propStr) {
               return target.default;
             }
           }
@@ -791,7 +881,8 @@ ${compiledCode}
         console.warn("[Modulo virtuale non trovato] '" + specifier + "' (richiesto da '" + (currentFile || 'root') + "').");
 
         var makeFallback = function(name) {
-          var dummyFn = function DummyFallbackComponent(props) {
+          var cleanName = String(name || 'Modulo').replace(/[^a-zA-Z0-9_$]/g, '');
+          var FallbackComp = function(props) {
             return window.React ? window.React.createElement('div', {
               style: {
                 display: 'inline-flex',
@@ -807,18 +898,21 @@ ${compiledCode}
                 fontFamily: 'monospace'
               },
               title: "Modulo non trovato: " + specifier
-            }, '⚠️ ' + name) : null;
+            }, '⚠️ ' + (cleanName || specifier)) : null;
           };
 
-          return new Proxy(dummyFn, {
+          FallbackComp.displayName = 'MissingModule_' + cleanName;
+          FallbackComp.default = FallbackComp;
+          FallbackComp.__esModule = true;
+
+          return new Proxy(FallbackComp, {
             get: function(t, p) {
+              if (typeof p === 'symbol') return undefined;
               if (p === '__esModule') return true;
-              if (p === 'default') return makeFallback(name);
-              if (p === 'then') return undefined;
-              return makeFallback(String(p));
-            },
-            apply: function() {
-              return makeFallback(name);
+              if (p === 'default') return t;
+              if (p === 'then' || p === '$$typeof' || p === 'defaultProps' || p === 'propTypes' || p === 'contextTypes') return undefined;
+              if (p in t) return t[p];
+              return FallbackComp;
             }
           });
         };
@@ -940,12 +1034,17 @@ ${compiledCode}
       }
     }
 
-    // 2b. If no component found in common entries, scan ALL compiled modules!
+    // 2b. If no component found in common entries, scan compiled modules (filtering duplicates)
     if (!appComponent) {
+      var visitedFiles = {};
       var modKeys = Object.keys(window.__modules__);
       for (var m = 0; m < modKeys.length; m++) {
         var modKey = modKeys[m];
-        if (modKey.endsWith('.css') || modKey.endsWith('.json') || modKey.endsWith('.svg') || modKey.endsWith('.png') || modKey.endsWith('.jpg')) continue;
+        if (!modKey.endsWith('.tsx') && !modKey.endsWith('.jsx') && !modKey.endsWith('.js') && !modKey.endsWith('.ts')) continue;
+        var canonical = norm(modKey);
+        if (visitedFiles[canonical]) continue;
+        visitedFiles[canonical] = true;
+
         try {
           var exportsObj = window.__createRequire('')(modKey);
           if (exportsObj) {

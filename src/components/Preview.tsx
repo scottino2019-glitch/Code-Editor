@@ -29,19 +29,23 @@ export const Preview: React.FC<PreviewProps> = ({ files, onClose, isStandalone =
   const [showConsole, setShowConsole] = useState<boolean>(false);
   const [filterText, setFilterText] = useState<string>('');
   const [srcDoc, setSrcDoc] = useState<string>('');
+  const [isCompiling, setIsCompiling] = useState<boolean>(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Debounced build of live preview HTML doc to avoid crashes/lag on pasting large text
+  // Debounced build of live preview HTML doc to ensure smooth typing in editor
   useEffect(() => {
+    setIsCompiling(true);
     const timer = setTimeout(() => {
       try {
         const html = buildPreviewHtml(files);
         setSrcDoc(html);
       } catch (err: any) {
         setSrcDoc(`<!DOCTYPE html><html><body style="background:#0F172A;color:#f87171;padding:20px;font-family:sans-serif;"><h3>Errore Anteprima</h3><pre>${err?.message || err}</pre></body></html>`);
+      } finally {
+        setIsCompiling(false);
       }
-    }, 300);
+    }, 600);
 
     return () => clearTimeout(timer);
   }, [files, refreshKey]);
@@ -94,13 +98,24 @@ export const Preview: React.FC<PreviewProps> = ({ files, onClose, isStandalone =
         
         {/* Left Status & Title */}
         <div className="flex items-center space-x-2">
-          <span className="flex h-2 w-2 relative">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-          </span>
+          {isCompiling ? (
+            <span className="flex h-2.5 w-2.5 relative items-center justify-center">
+              <span className="animate-spin h-2.5 w-2.5 rounded-full border-2 border-sky-400 border-t-transparent"></span>
+            </span>
+          ) : (
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+          )}
           <span className="font-bold text-slate-200 flex items-center gap-1.5">
             Anteprima Live
           </span>
+          {isCompiling && (
+            <span className="text-[10px] text-sky-400 font-mono animate-pulse hidden sm:inline">
+              (compilazione...)
+            </span>
+          )}
         </div>
 
         {/* Center Device Responsive Switcher */}

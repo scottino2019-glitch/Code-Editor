@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import JSZip from 'jszip';
 import { 
   FileTree 
@@ -117,14 +117,17 @@ export default function App() {
   const [showPasteModal, setShowPasteModal] = useState(false);
   const editorInstanceRef = useRef<any>(null);
 
-  // --- LOCALSTORAGE PERSISTENCE ---
+  // --- LOCALSTORAGE PERSISTENCE (Debounced to keep typing smooth) ---
   useEffect(() => {
-    try {
-      localStorage.setItem('codice_playground_files', JSON.stringify(files));
-    } catch (err) {
-      console.warn('Quota localStorage superata per la lista di file:', err);
-      showToast('Spazio di archiviazione locale del browser pieno: alcune modifiche non saranno salvate tra un riavvio e l\'altro.', 'error');
-    }
+    const saveTimer = setTimeout(() => {
+      try {
+        localStorage.setItem('codice_playground_files', JSON.stringify(files));
+      } catch (err) {
+        console.warn('Quota localStorage superata per la lista di file:', err);
+      }
+    }, 800);
+
+    return () => clearTimeout(saveTimer);
   }, [files]);
 
   useEffect(() => {
@@ -279,17 +282,23 @@ export default function App() {
     showToast('File rinominato correttamente!', 'success');
   };
 
-  // Content change handler
-  const handleContentChange = (newValue: string | undefined) => {
+  // Content change handler with equality check
+  const handleContentChange = useCallback((newValue: string | undefined) => {
     if (!activeFilePath || newValue === undefined) return;
 
-    setFiles(prev => prev.map(f => {
-      if (f.path === activeFilePath) {
-        return { ...f, content: newValue };
+    setFiles(prev => {
+      const current = prev.find(f => f.path === activeFilePath);
+      if (current && current.content === newValue) {
+        return prev;
       }
-      return f;
-    }));
-  };
+      return prev.map(f => {
+        if (f.path === activeFilePath) {
+          return { ...f, content: newValue };
+        }
+        return f;
+      });
+    });
+  }, [activeFilePath]);
 
   // Paste handlers
   const handlePasteReplace = (code: string) => {
@@ -542,6 +551,7 @@ export default function App() {
                 />
                 <div className="flex-1 overflow-hidden relative">
                   <EditorArea
+                    filePath={activeFile.path}
                     value={activeFile.content}
                     language={activeFile.language}
                     onChange={handleContentChange}
