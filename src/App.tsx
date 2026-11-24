@@ -200,8 +200,73 @@ export default function App() {
 
   // Create file
   const handleCreateFile = (path: string) => {
-    const trimmedPath = path.trim().replace(/^\/+/, ''); // remove leading slashes
-    if (!trimmedPath) return;
+    const rawSegments = path
+      .replace(/\\/g, '/')
+      .split('/')
+      .map(s => s.trim())
+      .filter(Boolean);
+
+    if (rawSegments.length === 0) return;
+
+    // Collect all existing folder paths in the workspace
+    const existingFoldersSet = new Set<string>();
+    files.forEach(f => {
+      const parts = f.path.replace(/\\/g, '/').split('/').filter(Boolean);
+      let acc = '';
+      for (let i = 0; i < parts.length - 1; i++) {
+        acc = acc ? `${acc}/${parts[i]}` : parts[i];
+        existingFoldersSet.add(acc);
+      }
+    });
+    const existingFolders = Array.from(existingFoldersSet);
+
+    const resolveFolderPath = (dirParts: string[]): string[] => {
+      if (dirParts.length === 0) return [];
+      const joined = dirParts.join('/');
+      const joinedLower = joined.toLowerCase();
+
+      // 1. Exact case-insensitive match at root
+      const exactMatch = existingFolders.find(f => f.toLowerCase() === joinedLower);
+      if (exactMatch) return exactMatch.split('/');
+
+      // 2. Unique suffix match (e.g. "src/components" -> "my-app/src/components")
+      const suffixMatches = existingFolders.filter(f =>
+        f.toLowerCase().endsWith('/' + joinedLower)
+      );
+      if (suffixMatches.length === 1) {
+        return suffixMatches[0].split('/');
+      }
+
+      // 3. Match longest parent folder prefix (exact or unique suffix) and preserve remaining subfolders
+      for (let len = dirParts.length - 1; len >= 1; len--) {
+        const subJoined = dirParts.slice(0, len).join('/').toLowerCase();
+        const rest = dirParts.slice(len);
+
+        const parentExact = existingFolders.find(f => f.toLowerCase() === subJoined);
+        if (parentExact) {
+          return [...parentExact.split('/'), ...rest];
+        }
+
+        const parentSuffix = existingFolders.filter(f =>
+          f.toLowerCase().endsWith('/' + subJoined)
+        );
+        if (parentSuffix.length === 1) {
+          return [...parentSuffix[0].split('/'), ...rest];
+        }
+      }
+
+      return dirParts;
+    };
+
+    const fileNamePart = rawSegments[rawSegments.length - 1];
+    const dirParts = rawSegments.slice(0, -1);
+    const resolvedDirParts = resolveFolderPath(dirParts);
+    const trimmedPath = [...resolvedDirParts, fileNamePart].join('/');
+
+    if (existingFolders.some(f => f.toLowerCase() === trimmedPath.toLowerCase())) {
+      showToast('Questo percorso corrisponde a una cartella esistente. Specifica anche il nome del file!', 'error');
+      return;
+    }
 
     if (files.some(f => f.path.toLowerCase() === trimmedPath.toLowerCase())) {
       showToast('Un file con questo percorso esiste già!', 'error');

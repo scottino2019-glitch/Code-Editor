@@ -50,11 +50,26 @@ export const FileTree: React.FC<FileTreeProps> = ({
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
   const [isCreatingFile, setIsCreatingFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
+  const [targetFolder, setTargetFolder] = useState('');
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renamingName, setRenamingName] = useState('');
 
   const folderInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Collect all unique existing folder paths sorted alphabetically
+  const existingFolders = React.useMemo(() => {
+    const folderSet = new Set<string>();
+    files.forEach(file => {
+      const parts = file.path.replace(/\\/g, '/').split('/').map(p => p.trim()).filter(Boolean);
+      let acc = '';
+      for (let i = 0; i < parts.length - 1; i++) {
+        acc = acc ? `${acc}/${parts[i]}` : parts[i];
+        folderSet.add(acc);
+      }
+    });
+    return Array.from(folderSet).sort((a, b) => a.localeCompare(b));
+  }, [files]);
 
   // Toggle folder collapse state
   const toggleFolder = (path: string) => {
@@ -74,7 +89,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
         return;
       }
 
-      const parts = file.path.split('/');
+      const parts = file.path.replace(/\\/g, '/').split('/').map(p => p.trim()).filter(Boolean);
       let current = root;
       let accumulatedPath = '';
 
@@ -186,10 +201,58 @@ export const FileTree: React.FC<FileTreeProps> = ({
 
   const handleCreateFileSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newFileName.trim()) return;
+    const cleanedInput = newFileName
+      .replace(/\\/g, '/')
+      .split('/')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .join('/');
 
-    onCreateFile(newFileName.trim());
+    if (!cleanedInput) return;
+
+    let finalPath = cleanedInput;
+    if (targetFolder) {
+      const folderLower = targetFolder.toLowerCase();
+      const inputLower = cleanedInput.toLowerCase();
+
+      // Avoid duplicating folder prefix if user already typed it (e.g. "src/components/Foo.tsx" with "src/components" selected)
+      if (inputLower.startsWith(folderLower + '/')) {
+        finalPath = targetFolder + cleanedInput.slice(targetFolder.length);
+      } else {
+        // Also check if user typed a trailing portion of targetFolder (e.g. "components/Foo.tsx" when "src/components" is selected)
+        const folderParts = targetFolder.split('/');
+        let matchedSuffix = false;
+        for (let i = 1; i < folderParts.length; i++) {
+          const suffix = folderParts.slice(i).join('/').toLowerCase();
+          if (inputLower.startsWith(suffix + '/')) {
+            finalPath = `${targetFolder}/${cleanedInput.slice(suffix.length + 1)}`;
+            matchedSuffix = true;
+            break;
+          }
+        }
+        if (!matchedSuffix) {
+          finalPath = `${targetFolder}/${cleanedInput}`;
+        }
+      }
+    }
+
+    // Auto-expand parent folders so the new file is immediately visible
+    const finalParts = finalPath.split('/');
+    if (finalParts.length > 1) {
+      setCollapsedFolders(prev => {
+        const next = { ...prev };
+        let acc = '';
+        for (let i = 0; i < finalParts.length - 1; i++) {
+          acc = acc ? `${acc}/${finalParts[i]}` : finalParts[i];
+          next[acc] = false;
+        }
+        return next;
+      });
+    }
+
+    onCreateFile(finalPath);
     setNewFileName('');
+    setTargetFolder('');
     setIsCreatingFile(false);
   };
 
@@ -332,6 +395,20 @@ export const FileTree: React.FC<FileTreeProps> = ({
                 )}
                 <span className="text-xs truncate font-medium text-slate-200">{child.name}</span>
               </div>
+
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setTargetFolder(child.path);
+                  setCollapsedFolders(prev => ({ ...prev, [child.path]: false }));
+                  setIsCreatingFile(true);
+                }}
+                title={`Nuovo file in ${child.path}`}
+                className="p-1 text-slate-400 hover:text-sky-400 hover:bg-slate-700/50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                id={`new-file-in-${child.path.replace(/[^a-zA-Z0-9]/g, '-')}`}
+              >
+                <Plus className="w-3 h-3" />
+              </button>
             </div>
 
             {!isCollapsed && (
@@ -411,7 +488,10 @@ export const FileTree: React.FC<FileTreeProps> = ({
         {/* ZIP Download & New File Button */}
         <div className="grid grid-cols-2 gap-2">
           <button
-            onClick={() => setIsCreatingFile(true)}
+            onClick={() => {
+              setTargetFolder('');
+              setIsCreatingFile(true);
+            }}
             className="flex items-center justify-center space-x-1 px-2.5 py-1.5 bg-[#38BDF8] hover:bg-[#7dd3fc] text-[#0F172A] rounded-md transition text-[11px] font-bold"
             id="btn-new-file"
           >
@@ -468,15 +548,34 @@ export const FileTree: React.FC<FileTreeProps> = ({
               <span>NUOVO FILE</span>
               <button 
                 type="button" 
-                onClick={() => setIsCreatingFile(false)}
+                onClick={() => {
+                  setIsCreatingFile(false);
+                  setTargetFolder('');
+                }}
                 className="text-slate-500 hover:text-white"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
+            {existingFolders.length > 0 && (
+              <select
+                value={targetFolder}
+                onChange={(e) => setTargetFolder(e.target.value)}
+                className="bg-slate-900 border border-slate-800 text-[11px] rounded p-1.5 text-slate-200 outline-none focus:border-sky-500 font-mono"
+                title="Cartella di destinazione"
+                id="select-target-folder"
+              >
+                <option value="">/ (cartella principale)</option>
+                {existingFolders.map(folder => (
+                  <option key={folder} value={folder}>
+                    {folder}/
+                  </option>
+                ))}
+              </select>
+            )}
             <input
               type="text"
-              placeholder="es. src/App.tsx o index.html"
+              placeholder={targetFolder ? 'es. Button.tsx' : 'es. src/App.tsx o index.html'}
               value={newFileName}
               onChange={(e) => setNewFileName(e.target.value)}
               className="bg-slate-900 border border-slate-800 text-xs rounded p-1.5 text-white outline-none focus:border-sky-500"
@@ -485,7 +584,10 @@ export const FileTree: React.FC<FileTreeProps> = ({
             <div className="flex justify-end space-x-1">
               <button
                 type="button"
-                onClick={() => setIsCreatingFile(false)}
+                onClick={() => {
+                  setIsCreatingFile(false);
+                  setTargetFolder('');
+                }}
                 className="px-2 py-0.5 text-[10px] text-slate-400 hover:text-white"
               >
                 Annulla
