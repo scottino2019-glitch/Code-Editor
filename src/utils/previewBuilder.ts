@@ -13,7 +13,7 @@ export interface ConsoleMessage {
 // -------------------------------------------------------------
 try {
   if (typeof Babel.registerPlugin === 'function') {
-    Babel.registerPlugin('loop-protection', function loopProtectionPlugin({ types: t }: any) {
+    Babel.registerPlugin('loop-protection', (function loopProtectionPlugin({ types: t }: any) {
       return {
         visitor: {
           'WhileStatement|ForStatement|DoWhileStatement'(path: any) {
@@ -36,7 +36,7 @@ try {
           }
         }
       };
-    });
+    }) as any);
   }
 } catch (e) {
   // Plugin might already be registered
@@ -239,7 +239,11 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
     // 2. Group files by type
     const cssFiles = files.filter(f => f.name.toLowerCase().endsWith('.css'));
     const jsFiles = files.filter(f => {
-      const ext = f.name.split('.').pop()?.toLowerCase();
+      const lower = f.name.toLowerCase();
+      if (lower.endsWith('.d.ts') || /^(vite|tailwind|postcss|eslint|next|vitest|jest|webpack|rollup|babel)\.config\./.test(lower)) {
+        return false;
+      }
+      const ext = lower.split('.').pop();
       return ext && ['js', 'jsx', 'ts', 'tsx'].includes(ext);
     });
     const jsonFiles = files.filter(f => f.name.toLowerCase().endsWith('.json'));
@@ -385,12 +389,12 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
     // 6. Connect HTML to Images: Resolve <img src="...">, <source srcset="...">, <link rel="icon">
     rawHtml = rawHtml.replace(/<img\b([^>]*\bsrc=["'])(?!data:)(?!https?:)(?!\/\/)([^"']+)(["'][^>]*)>/gi, (match, prefix, src, suffix) => {
       const resolved = resolveAssetDataUrl(src, htmlFile ? htmlFile.path : '', files);
-      return `${prefix}${resolved}${suffix}`;
+      return `<img${prefix}${resolved}${suffix}>`;
     });
 
     rawHtml = rawHtml.replace(/<source\b([^>]*\bsrcset=["'])(?!data:)(?!https?:)(?!\/\/)([^"']+)(["'][^>]*)>/gi, (match, prefix, srcset, suffix) => {
       const resolved = resolveAssetDataUrl(srcset, htmlFile ? htmlFile.path : '', files);
-      return `${prefix}${resolved}${suffix}`;
+      return `<source${prefix}${resolved}${suffix}>`;
     });
 
     rawHtml = rawHtml.replace(/<link\b([^>]*\b(?:rel=["'](?:icon|shortcut icon)["']|href=["'][^"']+\.(?:png|jpg|jpeg|ico|svg)["'])[^>]*)>/gi, (match, attrs) => {
@@ -423,15 +427,15 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
             presets: [
               ['env', {
                 targets: { chrome: '100', safari: '15', firefox: '100', edge: '100' },
-                modules: 'cjs',
-                loose: true
+                modules: 'cjs'
               }],
               'react',
               'typescript'
             ],
             filename: 'inline.tsx'
           });
-          const wrapped = `(function(require, module, exports) {\n${transformedInline.code}\n})(window.__createRequire ? window.__createRequire('') : function(m){ return window[m]; }, { exports: {} }, {});`;
+          const safeInlineCode = (transformedInline.code || '').replace(/<\/script/gi, '<\\/script');
+          const wrapped = `(function(require, module, exports) {\n${safeInlineCode}\n})(window.__createRequire ? window.__createRequire('') : function(m){ return window[m]; }, { exports: {} }, {});`;
           return `<script ${attrs}>\n${wrapped}\n</script>`;
         } catch (e) {
           return `<script type="module" ${attrs}>\n${inlineCode}\n</script>`;
@@ -528,8 +532,7 @@ ${assetModuleCode}
             presets: [
               ['env', {
                 targets: { chrome: '100', safari: '15', firefox: '100', edge: '100' },
-                modules: 'cjs',
-                loose: true
+                modules: 'cjs'
               }],
               'react',
               'typescript'
@@ -538,7 +541,7 @@ ${assetModuleCode}
             filename: jsFile.name.endsWith('.tsx') || jsFile.name.endsWith('.ts') ? jsFile.name : 'component.tsx'
           });
 
-          compiledCode = transformed.code || '';
+          compiledCode = (transformed.code || '').replace(/<\/script/gi, '<\\/script');
           transpileCache.set(cacheKey, {
             content: jsFile.content,
             compiledCode
@@ -558,6 +561,7 @@ ${assetModuleCode}
       const escapedPath = JSON.stringify(jsFile.path);
       const escapedName = JSON.stringify(jsFile.name);
       const normalizedP = JSON.stringify(normalizePath(jsFile.path));
+      const safeCompiledCode = compiledCode.replace(/<\/script/gi, '<\\/script');
 
       moduleDefs.push(`
 // --- Module: ${jsFile.path} ---
@@ -565,7 +569,7 @@ ${assetModuleCode}
   window.__modules__ = window.__modules__ || {};
   var modFn = function(require, module, exports) {
     try {
-${compiledCode}
+${safeCompiledCode}
     } catch(err) {
       console.error("Errore durante l'esecuzione di ${jsFile.path}:", err);
       throw err;
@@ -586,8 +590,8 @@ ${compiledCode}
 (function() {
   window.__modules__ = window.__modules__ || {};
   window.__moduleCache__ = window.__moduleCache__ || {};
-  window.__rawFiles__ = ${JSON.stringify(rawFileMap)};
-  window.__scriptEntries__ = ${JSON.stringify(localScriptEntries)};
+  window.__rawFiles__ = ${JSON.stringify(rawFileMap).replace(/</g, '\\u003c')};
+  window.__scriptEntries__ = ${JSON.stringify(localScriptEntries).replace(/</g, '\\u003c')};
 
   function cleanStr(s) {
     if (!s) return '';
@@ -811,8 +815,14 @@ ${compiledCode}
       }
       if (specifier === 'react-dom/client') {
         return {
-          createRoot: window.ReactDOM && window.ReactDOM.createRoot ? window.ReactDOM.createRoot.bind(window.ReactDOM) : null,
-          hydrateRoot: window.ReactDOM && window.ReactDOM.hydrateRoot ? window.ReactDOM.hydrateRoot.bind(window.ReactDOM) : null,
+          createRoot: window.ReactDOM && window.ReactDOM.createRoot ? function(container) {
+            window.__rootMounted__ = true;
+            return window.ReactDOM.createRoot(container);
+          } : null,
+          hydrateRoot: window.ReactDOM && window.ReactDOM.hydrateRoot ? function(container, el) {
+            window.__rootMounted__ = true;
+            return window.ReactDOM.hydrateRoot(container, el);
+          } : null,
           default: window.ReactDOM
         };
       }
@@ -1082,8 +1092,8 @@ ${compiledCode}
       }
     }
 
-    // 3. Auto-mount React App if found
-    if (appComponent && window.React && window.ReactDOM) {
+    // 3. Auto-mount React App if found (and not already mounted by an entry script like main.tsx)
+    if (!window.__rootMounted__ && appComponent && window.React && window.ReactDOM) {
       var rootEl = document.getElementById('root') || document.getElementById('app');
       if (!rootEl) {
         rootEl = document.createElement('div');
