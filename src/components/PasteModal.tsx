@@ -161,39 +161,65 @@ export const PasteModal: React.FC<PasteModalProps> = ({
         </div>
 
         {/* Footer Actions */}
-        <div className="px-5 py-3.5 border-t border-slate-800 bg-[#0F172A] flex flex-col sm:flex-row items-center justify-between gap-3">
-          <button
-            onClick={onClose}
-            className="w-full sm:w-auto px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-medium transition"
-          >
-            Annulla
-          </button>
-
-          <div className="w-full sm:w-auto flex flex-wrap items-center gap-2 justify-end">
+        <div className="px-5 py-3.5 border-t border-slate-800 bg-[#0F172A] flex flex-col gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <input
+              type="text"
+              value={newFileName}
+              onChange={(e) => setNewFileName(e.target.value)}
+              placeholder="Nome nuovo file (es. src/Componente.tsx)"
+              className="flex-1 bg-[#070D18] border border-slate-700 focus:border-emerald-500 rounded-lg px-3 py-1.5 text-xs text-slate-100 font-mono outline-none"
+            />
             <button
               disabled={!text.trim()}
               onClick={() => {
-                onPasteInsert(text);
+                onCreateNewWithCode(newFileName || 'NuovoComponente.tsx', text);
                 onClose();
               }}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none text-slate-200 rounded-lg text-xs font-medium transition border border-slate-700"
-              title="Inserisce il testo nel punto in cui si trova il cursore"
+              className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 disabled:pointer-events-none text-slate-950 font-bold rounded-lg text-xs transition flex items-center justify-center gap-1.5"
+              title="Crea un nuovo file con questo codice"
             >
-              Inserisci al cursore
+              <FilePlus className="w-3.5 h-3.5" />
+              <span>Crea Nuovo File</span>
+            </button>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-2">
+            <button
+              onClick={onClose}
+              className="w-full sm:w-auto px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-medium transition"
+            >
+              Annulla
             </button>
 
-            <button
-              disabled={!text.trim()}
-              onClick={() => {
-                onPasteReplace(text);
-                onClose();
-              }}
-              className="px-4 py-2 bg-sky-500 hover:bg-sky-400 disabled:opacity-40 disabled:pointer-events-none text-slate-950 font-bold rounded-lg text-xs transition shadow-sm flex items-center gap-1.5"
-              title="Sostituisce l'intero contenuto del file corrente"
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>Sostituisci intero file</span>
-            </button>
+            <div className="w-full sm:w-auto flex flex-wrap items-center gap-2 justify-end">
+              {fileName && (
+                <button
+                  disabled={!text.trim()}
+                  onClick={() => {
+                    onPasteInsert(text);
+                    onClose();
+                  }}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 disabled:pointer-events-none text-slate-200 rounded-lg text-xs font-medium transition border border-slate-700"
+                  title="Inserisce il testo nel punto in cui si trova il cursore"
+                >
+                  Inserisci al cursore
+                </button>
+              )}
+
+              <button
+                disabled={!text.trim()}
+                onClick={() => {
+                  onPasteReplace(text);
+                  onClose();
+                }}
+                className="px-4 py-2 bg-sky-500 hover:bg-sky-400 disabled:opacity-40 disabled:pointer-events-none text-slate-950 font-bold rounded-lg text-xs transition shadow-sm flex items-center gap-1.5"
+                title={fileName ? "Sostituisce l'intero contenuto del file corrente" : "Crea App.tsx con questo codice"}
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>{fileName ? 'Sostituisci intero file' : 'Incolla in App.tsx'}</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>

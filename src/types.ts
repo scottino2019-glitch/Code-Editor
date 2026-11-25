@@ -10,27 +10,50 @@ export interface Tab {
 }
 
 export const getLanguageFromExtension = (fileName: string): string => {
-  const ext = fileName.split('.').pop()?.toLowerCase();
+  const lowerName = fileName.trim().toLowerCase();
+  if (lowerName === 'dockerfile') return 'dockerfile';
+  if (lowerName.startsWith('.env')) return 'ini';
+
+  const ext = lowerName.split('.').pop();
   switch (ext) {
     case 'html':
     case 'htm':
       return 'html';
     case 'css':
       return 'css';
+    case 'scss':
+      return 'scss';
+    case 'less':
+      return 'less';
     case 'js':
-      return 'javascript';
     case 'jsx':
-      return 'javascript'; // Monaco handles JSX within javascript/typescript
+    case 'mjs':
+    case 'cjs':
+      return 'javascript';
     case 'ts':
-      return 'typescript';
     case 'tsx':
+    case 'mts':
+    case 'cts':
       return 'typescript';
     case 'json':
+    case 'jsonc':
       return 'json';
     case 'md':
+    case 'mdx':
       return 'markdown';
     case 'svg':
+    case 'xml':
       return 'xml';
+    case 'yaml':
+    case 'yml':
+      return 'yaml';
+    case 'sql':
+      return 'sql';
+    case 'py':
+      return 'python';
+    case 'sh':
+    case 'bash':
+      return 'shell';
     case 'png':
     case 'jpg':
     case 'jpeg':

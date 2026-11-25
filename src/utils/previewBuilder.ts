@@ -228,12 +228,17 @@ function processCssStyles(cssContent: string, cssFilePath: string, allFiles: Vir
   return processed;
 }
 
-export function buildPreviewHtml(files: VirtualFile[]): string {
+export function buildPreviewHtml(files: VirtualFile[], entryHtmlPath?: string): string {
   try {
-    // 1. Find HTML entrypoint, default to index.html or first .html file
-    let htmlFile = files.find(f => f.name.toLowerCase() === 'index.html');
+    // 1. Find HTML entrypoint: explicit entryHtmlPath if valid, else index.html, else first .html file
+    let htmlFile = entryHtmlPath
+      ? files.find(f => normalizePath(f.path).toLowerCase() === normalizePath(entryHtmlPath).toLowerCase() && (f.name.toLowerCase().endsWith('.html') || f.name.toLowerCase().endsWith('.htm')))
+      : undefined;
     if (!htmlFile) {
-      htmlFile = files.find(f => f.name.toLowerCase().endsWith('.html'));
+      htmlFile = files.find(f => f.name.toLowerCase() === 'index.html');
+    }
+    if (!htmlFile) {
+      htmlFile = files.find(f => f.name.toLowerCase().endsWith('.html') || f.name.toLowerCase().endsWith('.htm'));
     }
 
     // 2. Group files by type
@@ -244,7 +249,7 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
         return false;
       }
       const ext = lower.split('.').pop();
-      return ext && ['js', 'jsx', 'ts', 'tsx'].includes(ext);
+      return ext && ['js', 'jsx', 'mjs', 'cjs', 'ts', 'tsx', 'mts', 'cts'].includes(ext);
     });
     const jsonFiles = files.filter(f => f.name.toLowerCase().endsWith('.json'));
     const assetFiles = files.filter(f => {
@@ -449,13 +454,27 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
     const moduleDefs: string[] = [];
     const rawFileMap: Record<string, string> = {};
 
-    // Populate raw files
+    // Populate raw files (prioritize full path, only set bare filename if not already registered)
     files.forEach(f => {
       rawFileMap[f.path] = f.content;
-      rawFileMap[f.name] = f.content;
       const norm = normalizePath(f.path);
       if (norm) rawFileMap[norm] = f.content;
+      if (!rawFileMap[f.name]) {
+        rawFileMap[f.name] = f.content;
+      }
     });
+
+    // Detect common top-level wrapper folder (e.g. "my-project/") for uploaded projects
+    const topSegments = new Set<string>();
+    files.forEach(f => {
+      const segs = normalizePath(f.path).split('/').filter(Boolean);
+      if (segs.length > 1) topSegments.add(segs[0]);
+    });
+    const projectRoots: string[] = [];
+    if (topSegments.size === 1) {
+      const rootFolder = Array.from(topSegments)[0];
+      projectRoots.push(`${rootFolder}/`, `${rootFolder}/src/`, `${rootFolder}/src/components/`, `${rootFolder}/components/`);
+    }
 
     // Register Asset & Image Virtual Modules
     assetFiles.forEach(asset => {
@@ -496,9 +515,11 @@ export function buildPreviewHtml(files: VirtualFile[]): string {
 ${assetModuleCode}
   };
   window.__modules__[${JSON.stringify(asset.path)}] = modFn;
-  window.__modules__[${JSON.stringify(asset.name)}] = modFn;
   var normP = ${JSON.stringify(normalizePath(asset.path))};
   if (normP) window.__modules__[normP] = modFn;
+  if (!window.__modules__[${JSON.stringify(asset.name)}]) {
+    window.__modules__[${JSON.stringify(asset.name)}] = modFn;
+  }
 })();
 `);
     });
@@ -538,7 +559,7 @@ ${assetModuleCode}
               'typescript'
             ],
             plugins: babelPlugins,
-            filename: jsFile.name.endsWith('.tsx') || jsFile.name.endsWith('.ts') ? jsFile.name : 'component.tsx'
+            filename: (jsFile.name.toLowerCase().endsWith('.tsx') || jsFile.name.toLowerCase().endsWith('.ts') || jsFile.name.toLowerCase().endsWith('.mts') || jsFile.name.toLowerCase().endsWith('.cts')) ? jsFile.name : 'component.tsx'
           });
 
           compiledCode = (transformed.code || '').replace(/<\/script/gi, '<\\/script');
@@ -576,9 +597,11 @@ ${safeCompiledCode}
     }
   };
   window.__modules__[${escapedPath}] = modFn;
-  window.__modules__[${escapedName}] = modFn;
   if (${normalizedP}) {
     window.__modules__[${normalizedP}] = modFn;
+  }
+  if (!window.__modules__[${escapedName}]) {
+    window.__modules__[${escapedName}] = modFn;
   }
 })();
 `);
@@ -592,6 +615,8 @@ ${safeCompiledCode}
   window.__moduleCache__ = window.__moduleCache__ || {};
   window.__rawFiles__ = ${JSON.stringify(rawFileMap).replace(/</g, '\\u003c')};
   window.__scriptEntries__ = ${JSON.stringify(localScriptEntries).replace(/</g, '\\u003c')};
+  window.__projectRoots__ = ${JSON.stringify(projectRoots).replace(/</g, '\\u003c')};
+  window.__htmlBaseDir__ = ${JSON.stringify(htmlFile ? normalizePath(htmlFile.path).split('/').slice(0, -1).join('/') : '').replace(/</g, '\\u003c')};
 
   function cleanStr(s) {
     if (!s) return '';
@@ -641,7 +666,7 @@ ${safeCompiledCode}
     }
 
     var exts = [
-      '', '.tsx', '.ts', '.jsx', '.js', '.json',
+      '', '.tsx', '.ts', '.jsx', '.js', '.mjs', '.cjs', '.mts', '.cts', '.json',
       '.svg', '.png', '.jpg', '.jpeg', '.webp', '.css',
       '/index.tsx', '/index.ts', '/index.jsx', '/index.js'
     ];
@@ -683,8 +708,8 @@ ${safeCompiledCode}
       }
     }
 
-    // 4. Search in common folders (src/, src/components/, components/)
-    var commonPrefixes = ['src/', 'src/components/', 'components/', 'assets/'];
+    // 4. Search in common folders (src/, src/components/, components/) and detected project roots
+    var commonPrefixes = (window.__projectRoots__ || []).concat(['src/', 'src/components/', 'components/', 'assets/']);
     for (var p = 0; p < commonPrefixes.length; p++) {
       for (var j = 0; j < exts.length; j++) {
         var m = findMatch(commonPrefixes[p] + cleanSpecifier + exts[j]);
@@ -833,7 +858,7 @@ ${safeCompiledCode}
           Fragment: window.React.Fragment
         };
       }
-      if (specifier.endsWith('.css')) {
+      if (specifier.toLowerCase().endsWith('.css') || specifier.toLowerCase().endsWith('.scss') || specifier.toLowerCase().endsWith('.less')) {
         return {}; // CSS imported in JS is bundled globally
       }
       if (specifier === 'lucide-react') {
@@ -935,7 +960,7 @@ ${safeCompiledCode}
       }
 
       // JSON files
-      if (resolved.endsWith('.json')) {
+      if (resolved.toLowerCase().endsWith('.json')) {
         var jsonContent = window.__rawFiles__[resolved];
         if (jsonContent !== undefined) {
           try {
@@ -970,13 +995,14 @@ ${safeCompiledCode}
 
   // Launch application
   function runPlaygroundApp() {
-    // 1. Run scripts explicitly declared in HTML
+    // 1. Run scripts explicitly declared in HTML (resolve relative to HTML file's directory)
     var scriptEntries = window.__scriptEntries__ || [];
+    var htmlBase = window.__htmlBaseDir__ ? window.__htmlBaseDir__ + '/index.html' : '';
     scriptEntries.forEach(function(entry) {
       try {
-        var resolved = window.__resolveModulePath('', entry);
+        var resolved = window.__resolveModulePath(htmlBase, entry);
         if (resolved) {
-          window.__createRequire('')(resolved);
+          window.__createRequire(htmlBase)(resolved);
         }
       } catch (e) {
         console.error("Errore durante l'avvio dello script '" + entry + "':", e);
@@ -1050,7 +1076,8 @@ ${safeCompiledCode}
       var modKeys = Object.keys(window.__modules__);
       for (var m = 0; m < modKeys.length; m++) {
         var modKey = modKeys[m];
-        if (!modKey.endsWith('.tsx') && !modKey.endsWith('.jsx') && !modKey.endsWith('.js') && !modKey.endsWith('.ts')) continue;
+        var lowerModKey = modKey.toLowerCase();
+        if (!lowerModKey.endsWith('.tsx') && !lowerModKey.endsWith('.jsx') && !lowerModKey.endsWith('.js') && !lowerModKey.endsWith('.ts') && !lowerModKey.endsWith('.mjs') && !lowerModKey.endsWith('.cjs') && !lowerModKey.endsWith('.mts') && !lowerModKey.endsWith('.cts')) continue;
         var canonical = norm(modKey);
         if (visitedFiles[canonical]) continue;
         visitedFiles[canonical] = true;
@@ -1167,6 +1194,21 @@ ${safeCompiledCode}
       }
     }
   }
+
+  // Intercept clicks on relative .html links so multi-page HTML workspaces navigate cleanly
+  document.addEventListener('click', function(e) {
+    var target = e.target;
+    while (target && target.tagName !== 'A') {
+      target = target.parentElement;
+    }
+    if (target && target.getAttribute) {
+      var href = target.getAttribute('href');
+      if (href && !/^(https?:|mailto:|tel:|#|javascript:)/i.test(href) && /\\.html?($|[?#])/i.test(href)) {
+        e.preventDefault();
+        window.parent.postMessage({ type: 'PREVIEW_NAVIGATE_HTML', href: href }, '*');
+      }
+    }
+  });
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', runPlaygroundApp);

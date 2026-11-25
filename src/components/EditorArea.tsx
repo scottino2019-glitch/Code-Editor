@@ -1,10 +1,12 @@
 import React, { useRef, useEffect } from 'react';
-import Editor, { OnMount } from '@monaco-editor/react';
+import Editor, { OnMount, BeforeMount } from '@monaco-editor/react';
+import { VirtualFile } from '../types';
 
 interface EditorAreaProps {
   filePath: string;
   value: string;
   language: string;
+  files?: VirtualFile[];
   onChange: (newValue: string | undefined) => void;
   fontSize: number;
   wordWrap: boolean;
@@ -12,10 +14,48 @@ interface EditorAreaProps {
   onEditorReady?: (editor: any) => void;
 }
 
+const AMBIENT_DECLARATIONS = `
+declare module 'react' {
+  const React: any;
+  export = React;
+  export as namespace React;
+}
+declare module 'react/jsx-runtime' {
+  export const jsx: any;
+  export const jsxs: any;
+  export const Fragment: any;
+}
+declare module 'react-dom' {
+  const ReactDOM: any;
+  export = ReactDOM;
+}
+declare module 'react-dom/client' {
+  export function createRoot(container: any): { render(element: any): void; unmount(): void };
+  export function hydrateRoot(container: any, element: any): any;
+}
+declare module 'lucide-react' {
+  const icons: Record<string, any>;
+  export = icons;
+}
+declare module '*.css' { const styles: Record<string, string>; export default styles; }
+declare module '*.scss' { const styles: Record<string, string>; export default styles; }
+declare module '*.less' { const styles: Record<string, string>; export default styles; }
+declare module '*.svg' { const src: string; export default src; export const ReactComponent: any; }
+declare module '*.png' { const src: string; export default src; }
+declare module '*.jpg' { const src: string; export default src; }
+declare module '*.jpeg' { const src: string; export default src; }
+declare module '*.gif' { const src: string; export default src; }
+declare module '*.webp' { const src: string; export default src; }
+declare module '*.ico' { const src: string; export default src; }
+`;
+
+const toModelUriString = (p: string) => 'file:///' + (p || 'untitled.txt').replace(/^\/+/, '');
+
 export const EditorArea: React.FC<EditorAreaProps> = ({
   filePath,
   value,
   language,
+  files = [],
   onChange,
   fontSize,
   wordWrap,
@@ -23,12 +63,90 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
   onEditorReady,
 }) => {
   const editorRef = useRef<any>(null);
+  const monacoRef = useRef<any>(null);
   const isInternalChangeRef = useRef<boolean>(false);
   const currentPathRef = useRef<string>(filePath);
+  const defaultsConfiguredRef = useRef<boolean>(false);
 
   useEffect(() => {
     currentPathRef.current = filePath;
   }, [filePath]);
+
+  const configureMonacoDefaults = (monaco: any) => {
+    if (!monaco || defaultsConfiguredRef.current) return;
+    defaultsConfiguredRef.current = true;
+
+    const ts = monaco.languages?.typescript;
+    if (!ts) return;
+
+    const sharedCompilerOptions = {
+      target: ts.ScriptTarget.ESNext,
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeJs,
+      jsx: ts.JsxEmit.ReactJSX,
+      allowJs: true,
+      allowNonTsExtensions: true,
+      esModuleInterop: true,
+      allowSyntheticDefaultImports: true,
+      resolveJsonModule: true,
+      isolatedModules: true,
+      noEmit: true,
+      baseUrl: 'file:///',
+      paths: {
+        '@/*': ['file:///*'],
+        '~/*': ['file:///*'],
+      },
+    };
+
+    ts.typescriptDefaults.setCompilerOptions(sharedCompilerOptions);
+    ts.javascriptDefaults.setCompilerOptions({
+      ...sharedCompilerOptions,
+      checkJs: false,
+    });
+
+    ts.typescriptDefaults.setEagerModelSync(true);
+    ts.javascriptDefaults.setEagerModelSync(true);
+
+    ts.typescriptDefaults.addExtraLib(AMBIENT_DECLARATIONS, 'file:///__ambient_playground__.d.ts');
+    ts.javascriptDefaults.addExtraLib(AMBIENT_DECLARATIONS, 'file:///__ambient_playground__.d.ts');
+  };
+
+  // Sync all workspace files as Monaco models so newly created/uploaded/renamed files are recognized
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || !files) return;
+
+    const activeUriStr = toModelUriString(filePath);
+    const validUris = new Set<string>();
+
+    files.forEach((f) => {
+      if (f.language === 'image') return;
+      const uriStr = toModelUriString(f.path);
+      validUris.add(uriStr);
+      const uri = monaco.Uri.parse(uriStr);
+      const existingModel = monaco.editor.getModel(uri);
+
+      if (!existingModel) {
+        monaco.editor.createModel(f.content || '', f.language || 'plaintext', uri);
+      } else {
+        if (existingModel.getLanguageId && existingModel.getLanguageId() !== f.language && f.language) {
+          monaco.editor.setModelLanguage(existingModel, f.language);
+        }
+        // Only update background models (never overwrite the active model while user is typing)
+        if (uriStr !== activeUriStr && existingModel.getValue() !== f.content) {
+          existingModel.setValue(f.content || '');
+        }
+      }
+    });
+
+    // Dispose models for deleted or renamed files so recreated files don't keep stale content
+    monaco.editor.getModels().forEach((model: any) => {
+      const uriStr = model.uri.toString();
+      if (uriStr.startsWith('file:///') && !uriStr.endsWith('__ambient_playground__.d.ts') && !validUris.has(uriStr)) {
+        model.dispose();
+      }
+    });
+  }, [files, filePath]);
 
   // Handle external updates to value (e.g. Paste Modal, Reset, External Upload)
   // When user is typing inside Monaco, isInternalChangeRef is true, so we NEVER overwrite Monaco!
@@ -38,26 +156,48 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
       return;
     }
 
-    if (editorRef.current) {
+    if (editorRef.current && monacoRef.current) {
+      const targetUri = toModelUriString(filePath);
       const model = editorRef.current.getModel();
-      if (model && model.getValue() !== value) {
-        // Value changed from an outside action (Paste modal, reset, etc.)
-        const pos = editorRef.current.getPosition();
-        model.setValue(value || '');
-        if (pos) {
-          try {
-            editorRef.current.setPosition(pos);
-          } catch (e) {}
+      if (model && model.uri.toString() === targetUri) {
+        if (model.getLanguageId && model.getLanguageId() !== language && language) {
+          monacoRef.current.editor.setModelLanguage(model, language);
+        }
+        if (model.getValue() !== value) {
+          const pos = editorRef.current.getPosition();
+          model.setValue(value || '');
+          if (pos) {
+            try {
+              editorRef.current.setPosition(pos);
+            } catch (e) {}
+          }
         }
       }
     }
-  }, [value, filePath]);
+  }, [value, filePath, language]);
+
+  const handleBeforeMount: BeforeMount = (monaco) => {
+    monacoRef.current = monaco;
+    configureMonacoDefaults(monaco);
+  };
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+    monacoRef.current = monaco;
+    configureMonacoDefaults(monaco);
+
     if (onEditorReady) {
       onEditorReady(editor);
     }
+
+    // Ensure all existing workspace files are immediately registered on first mount
+    files.forEach((f) => {
+      if (f.language === 'image') return;
+      const uri = monaco.Uri.parse(toModelUriString(f.path));
+      if (!monaco.editor.getModel(uri)) {
+        monaco.editor.createModel(f.content || '', f.language || 'plaintext', uri);
+      }
+    });
 
     // Register custom context menu Paste action for right-click
     // Note: Do NOT bind KeyMod.CtrlCmd | KeyCode.KeyV so the browser's native paste handler works flawlessly!
@@ -130,7 +270,7 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
   }
 
   // Generate unique model URI for each file
-  const modelPath = 'file:///' + (filePath || 'untitled.txt').replace(/^\/+/, '');
+  const modelPath = toModelUriString(filePath);
 
   return (
     <div className="flex-1 w-full h-full relative bg-[#1e1e1e]">
@@ -139,8 +279,10 @@ export const EditorArea: React.FC<EditorAreaProps> = ({
         width="100%"
         path={modelPath}
         defaultValue={value}
+        language={language}
         defaultLanguage={language}
         theme="vs-dark"
+        beforeMount={handleBeforeMount}
         onChange={handleEditorChange}
         onMount={handleEditorDidMount}
         loading={

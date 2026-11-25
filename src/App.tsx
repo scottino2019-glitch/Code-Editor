@@ -115,6 +115,7 @@ export default function App() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showShortcutsHelp, setShowShortcutsHelp] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
+  const [createFileTrigger, setCreateFileTrigger] = useState(0);
   const editorInstanceRef = useRef<any>(null);
 
   // --- LOCALSTORAGE PERSISTENCE (Debounced to keep typing smooth) ---
@@ -199,7 +200,7 @@ export default function App() {
   };
 
   // Create file
-  const handleCreateFile = (path: string) => {
+  const handleCreateFile = (path: string, initialContentOverride?: string) => {
     const rawSegments = path
       .replace(/\\/g, '/')
       .split('/')
@@ -293,7 +294,7 @@ export default function App() {
     const newFile: VirtualFile = {
       path: trimmedPath,
       name,
-      content: initialContent,
+      content: initialContentOverride !== undefined ? initialContentOverride : initialContent,
       language
     };
 
@@ -312,12 +313,17 @@ export default function App() {
     showToast(`"${fileName}" eliminato.`, 'info');
   };
 
-  // Rename file
+  // Rename / move file
   const handleRenameFile = (oldPath: string, newPath: string) => {
-    const trimmedNew = newPath.trim().replace(/^\/+/, '');
+    const trimmedNew = newPath
+      .replace(/\\/g, '/')
+      .split('/')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .join('/');
     if (!trimmedNew || trimmedNew === oldPath) return;
 
-    if (files.some(f => f.path.toLowerCase() === trimmedNew.toLowerCase())) {
+    if (files.some(f => f.path.toLowerCase() === trimmedNew.toLowerCase() && f.path !== oldPath)) {
       showToast('Un file con questo percorso esiste già!', 'error');
       return;
     }
@@ -372,11 +378,7 @@ export default function App() {
       const curFile = files.find(f => f.path === activeFilePath);
       showToast(`Codice incollato con successo in "${curFile?.name || 'file'}"!`, 'success');
     } else {
-      handleCreateFile('App.tsx');
-      setTimeout(() => {
-        handleContentChange(code);
-      }, 50);
-      showToast('Creato "App.tsx" con il codice incollato!', 'success');
+      handleCreateFile('App.tsx', code);
     }
   };
 
@@ -403,10 +405,7 @@ export default function App() {
 
   const handleCreateNewWithCode = (suggestedName: string, code: string) => {
     const fileName = suggestedName.trim() || 'NuovoComponente.tsx';
-    handleCreateFile(fileName);
-    setTimeout(() => {
-      handleContentChange(code);
-    }, 50);
+    handleCreateFile(fileName, code);
   };
 
   // Upload/merge files
@@ -590,6 +589,7 @@ export default function App() {
           onCreateFile={handleCreateFile}
           onUploadFiles={handleUploadFiles}
           onDownloadAll={handleDownloadAllAsZip}
+          createFileTrigger={createFileTrigger}
         />
 
         {/* Workspace Body: Split View of Code Editor & Live Preview */}
@@ -619,6 +619,7 @@ export default function App() {
                     filePath={activeFile.path}
                     value={activeFile.content}
                     language={activeFile.language}
+                    files={files}
                     onChange={handleContentChange}
                     fontSize={fontSize}
                     wordWrap={wordWrap}
@@ -629,10 +630,7 @@ export default function App() {
               </div>
             ) : (
               <WelcomeScreen
-                onCreateNewFile={() => {
-                  const input = prompt('Inserisci il nome del file (es: index.html, styles.css):');
-                  if (input) handleCreateFile(input);
-                }}
+                onCreateNewFile={() => setCreateFileTrigger(c => c + 1)}
                 onPasteCode={() => setShowPasteModal(true)}
                 onUploadFolder={() => {
                   const btn = document.getElementById('btn-upload-folder');
@@ -650,7 +648,8 @@ export default function App() {
           {showPreview && (
             <div className="md:w-1/2 h-1/2 md:h-full border-t md:border-t-0 md:border-l border-slate-800 flex flex-col overflow-hidden">
               <Preview 
-                files={files} 
+                files={files}
+                activeFilePath={activeFilePath}
                 onClose={() => setShowPreview(false)}
               />
             </div>

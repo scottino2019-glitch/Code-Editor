@@ -1,8 +1,7 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Folder, 
   FolderOpen, 
-  File, 
   ChevronRight, 
   ChevronDown, 
   Trash2, 
@@ -14,7 +13,8 @@ import {
   Search, 
   X,
   FileCode,
-  Sparkles
+  Sparkles,
+  FolderInput
 } from 'lucide-react';
 import { VirtualFile, getLanguageFromExtension } from '../types';
 
@@ -27,6 +27,7 @@ interface FileTreeProps {
   onCreateFile: (path: string) => void;
   onUploadFiles: (uploaded: VirtualFile[]) => void;
   onDownloadAll: () => void;
+  createFileTrigger?: number;
 }
 
 interface TreeNode {
@@ -34,6 +35,12 @@ interface TreeNode {
   path: string;
   isFile: boolean;
   children: Record<string, TreeNode>;
+}
+
+interface PendingUploadFile {
+  name: string;
+  content: string;
+  language: string;
 }
 
 export const FileTree: React.FC<FileTreeProps> = ({
@@ -45,6 +52,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
   onCreateFile,
   onUploadFiles,
   onDownloadAll,
+  createFileTrigger,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
@@ -54,8 +62,28 @@ export const FileTree: React.FC<FileTreeProps> = ({
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renamingName, setRenamingName] = useState('');
 
+  // Upload destination modal state (when uploading via "Carica File" button)
+  const [pendingUploadFiles, setPendingUploadFiles] = useState<PendingUploadFile[] | null>(null);
+  const [uploadModalFolder, setUploadModalFolder] = useState('');
+  const [uploadCustomFolder, setUploadCustomFolder] = useState('');
+
+  // Drag & drop state
+  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
+  const [draggingFilePath, setDraggingFilePath] = useState<string | null>(null);
+
   const folderInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadTargetFolderRef = useRef<string | null>(null);
+  const treeScrollRef = useRef<HTMLDivElement>(null);
+
+  // Open inline creation form when triggered externally (e.g. from WelcomeScreen)
+  useEffect(() => {
+    if (createFileTrigger && createFileTrigger > 0) {
+      setTargetFolder('');
+      setIsCreatingFile(true);
+      treeScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [createFileTrigger]);
 
   // Collect all unique existing folder paths sorted alphabetically
   const existingFolders = React.useMemo(() => {
@@ -70,6 +98,20 @@ export const FileTree: React.FC<FileTreeProps> = ({
     });
     return Array.from(folderSet).sort((a, b) => a.localeCompare(b));
   }, [files]);
+
+  const expandFolderChain = (folderPath: string) => {
+    const parts = folderPath.replace(/\\/g, '/').split('/').map(p => p.trim()).filter(Boolean);
+    if (parts.length === 0) return;
+    setCollapsedFolders(prev => {
+      const next = { ...prev };
+      let acc = '';
+      for (let i = 0; i < parts.length; i++) {
+        acc = acc ? `${acc}/${parts[i]}` : parts[i];
+        next[acc] = false;
+      }
+      return next;
+    });
+  };
 
   // Toggle folder collapse state
   const toggleFolder = (path: string) => {
@@ -128,6 +170,28 @@ export const FileTree: React.FC<FileTreeProps> = ({
     });
   };
 
+  const finalizeUploadedFiles = (items: PendingUploadFile[], destinationFolder: string) => {
+    const cleanFolder = destinationFolder
+      .replace(/\\/g, '/')
+      .split('/')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .join('/');
+
+    const virtualFiles: VirtualFile[] = items.map(item => ({
+      path: cleanFolder ? `${cleanFolder}/${item.name}` : item.name,
+      name: item.name,
+      content: item.content,
+      language: item.language,
+    }));
+
+    if (cleanFolder) {
+      expandFolderChain(cleanFolder);
+    }
+    setSearchQuery('');
+    onUploadFiles(virtualFiles);
+  };
+
   // Handler for directory / folder upload
   const handleFolderUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const uploadedFiles = event.target.files;
@@ -162,6 +226,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
     }
 
     if (newFiles.length > 0) {
+      setSearchQuery('');
       onUploadFiles(newFiles);
     }
     
@@ -174,15 +239,17 @@ export const FileTree: React.FC<FileTreeProps> = ({
     const uploadedFiles = event.target.files;
     if (!uploadedFiles || uploadedFiles.length === 0) return;
 
-    const newFiles: VirtualFile[] = [];
+    const directFolder = uploadTargetFolderRef.current;
+    uploadTargetFolderRef.current = null;
+
+    const parsedFiles: PendingUploadFile[] = [];
     for (let i = 0; i < uploadedFiles.length; i++) {
       const file = uploadedFiles[i];
       if (file.name.startsWith('.')) continue;
 
       try {
         const content = await readFileData(file);
-        newFiles.push({
-          path: file.name,
+        parsedFiles.push({
           name: file.name,
           content,
           language: getLanguageFromExtension(file.name),
@@ -192,11 +259,88 @@ export const FileTree: React.FC<FileTreeProps> = ({
       }
     }
 
-    if (newFiles.length > 0) {
-      onUploadFiles(newFiles);
+    if (event.target) event.target.value = '';
+    if (parsedFiles.length === 0) return;
+
+    if (directFolder !== null) {
+      finalizeUploadedFiles(parsedFiles, directFolder);
+      return;
     }
 
-    if (event.target) event.target.value = '';
+    // Determine sensible default folder from currently active file
+    const activeDir = activeFilePath && activeFilePath.includes('/')
+      ? activeFilePath.split('/').slice(0, -1).join('/')
+      : '';
+    setUploadModalFolder(activeDir);
+    setUploadCustomFolder('');
+    setPendingUploadFiles(parsedFiles);
+  };
+
+  const handleConfirmUploadModal = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pendingUploadFiles || pendingUploadFiles.length === 0) return;
+
+    const chosenFolder = uploadCustomFolder.trim()
+      ? uploadCustomFolder.trim()
+      : uploadModalFolder;
+
+    finalizeUploadedFiles(pendingUploadFiles, chosenFolder);
+    setPendingUploadFiles(null);
+    setUploadModalFolder('');
+    setUploadCustomFolder('');
+  };
+
+  const handleTriggerFolderFileUpload = (folderPath: string) => {
+    uploadTargetFolderRef.current = folderPath;
+    fileInputRef.current?.click();
+  };
+
+  const handleTriggerRootFileUpload = () => {
+    uploadTargetFolderRef.current = null;
+    fileInputRef.current?.click();
+  };
+
+  // Handle dropping OS files or dragging existing workspace files onto a folder (or root '')
+  const handleDropOnTarget = async (e: React.DragEvent, destinationFolder: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverFolder(null);
+
+    const internalPath = e.dataTransfer.getData('application/x-playground-file');
+    if (internalPath) {
+      setDraggingFilePath(null);
+      const fileName = internalPath.split('/').pop() || internalPath;
+      const cleanFolder = destinationFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+      const newPath = cleanFolder ? `${cleanFolder}/${fileName}` : fileName;
+      if (newPath !== internalPath) {
+        if (cleanFolder) expandFolderChain(cleanFolder);
+        onRenameFile(internalPath, newPath);
+      }
+      return;
+    }
+
+    const droppedFiles = e.dataTransfer.files;
+    if (!droppedFiles || droppedFiles.length === 0) return;
+
+    const parsedFiles: PendingUploadFile[] = [];
+    for (let i = 0; i < droppedFiles.length; i++) {
+      const file = droppedFiles[i];
+      if (file.name.startsWith('.')) continue;
+      try {
+        const content = await readFileData(file);
+        parsedFiles.push({
+          name: file.name,
+          content,
+          language: getLanguageFromExtension(file.name),
+        });
+      } catch (err) {
+        console.error('Errore nella lettura del file trascinato:', file.name, err);
+      }
+    }
+
+    if (parsedFiles.length > 0) {
+      finalizeUploadedFiles(parsedFiles, destinationFolder);
+    }
   };
 
   const handleCreateFileSubmit = (e: React.FormEvent) => {
@@ -236,19 +380,12 @@ export const FileTree: React.FC<FileTreeProps> = ({
       }
     }
 
-    // Auto-expand parent folders so the new file is immediately visible
+    // Auto-expand parent folders and clear search filter so the new file is immediately visible
     const finalParts = finalPath.split('/');
     if (finalParts.length > 1) {
-      setCollapsedFolders(prev => {
-        const next = { ...prev };
-        let acc = '';
-        for (let i = 0; i < finalParts.length - 1; i++) {
-          acc = acc ? `${acc}/${finalParts[i]}` : finalParts[i];
-          next[acc] = false;
-        }
-        return next;
-      });
+      expandFolderChain(finalParts.slice(0, -1).join('/'));
     }
+    setSearchQuery('');
 
     onCreateFile(finalPath);
     setNewFileName('');
@@ -258,14 +395,35 @@ export const FileTree: React.FC<FileTreeProps> = ({
 
   const handleRenameSubmit = (oldPath: string, e: React.FormEvent) => {
     e.preventDefault();
-    if (!renamingName.trim() || renamingName.trim() === oldPath.split('/').pop()) {
+    const trimmedInput = renamingName.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!trimmedInput) {
       setRenamingPath(null);
       return;
     }
 
-    const parts = oldPath.split('/');
-    parts[parts.length - 1] = renamingName.trim();
-    const newPath = parts.join('/');
+    let newPath: string;
+    if (trimmedInput.includes('/')) {
+      // User specified a folder path (e.g. "src/components/Button.tsx") -> move + rename
+      newPath = trimmedInput
+        .split('/')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .join('/');
+    } else {
+      const parts = oldPath.split('/');
+      parts[parts.length - 1] = trimmedInput;
+      newPath = parts.join('/');
+    }
+
+    if (!newPath || newPath === oldPath) {
+      setRenamingPath(null);
+      return;
+    }
+
+    const newParts = newPath.split('/');
+    if (newParts.length > 1) {
+      expandFolderChain(newParts.slice(0, -1).join('/'));
+    }
 
     onRenameFile(oldPath, newPath);
     setRenamingPath(null);
@@ -276,14 +434,23 @@ export const FileTree: React.FC<FileTreeProps> = ({
   const getIconColor = (fileName: string) => {
     const ext = fileName.split('.').pop()?.toLowerCase();
     switch (ext) {
-      case 'html': return 'text-orange-500';
-      case 'css': return 'text-blue-500';
-      case 'js': return 'text-yellow-500';
+      case 'html':
+      case 'htm': return 'text-orange-500';
+      case 'css':
+      case 'scss':
+      case 'less': return 'text-blue-500';
+      case 'js':
+      case 'mjs':
+      case 'cjs': return 'text-yellow-500';
       case 'jsx': return 'text-teal-400';
-      case 'ts': return 'text-sky-500';
+      case 'ts':
+      case 'mts':
+      case 'cts': return 'text-sky-500';
       case 'tsx': return 'text-indigo-400';
-      case 'json': return 'text-amber-500';
-      case 'md': return 'text-purple-400';
+      case 'json':
+      case 'jsonc': return 'text-amber-500';
+      case 'md':
+      case 'mdx': return 'text-purple-400';
       case 'svg':
       case 'png':
       case 'jpg':
@@ -315,11 +482,21 @@ export const FileTree: React.FC<FileTreeProps> = ({
         return (
           <div 
             key={child.path}
+            draggable={!isRenamingThis}
+            onDragStart={(e) => {
+              e.dataTransfer.setData('application/x-playground-file', child.path);
+              e.dataTransfer.effectAllowed = 'move';
+              setDraggingFilePath(child.path);
+            }}
+            onDragEnd={() => {
+              setDraggingFilePath(null);
+              setDragOverFolder(null);
+            }}
             className={`group flex items-center justify-between px-3 py-1.5 mx-1 rounded-md transition-all duration-150 cursor-pointer ${
               isActive 
                 ? 'bg-[#1E293B] text-slate-100 font-medium border-l-2 border-[#38BDF8] pl-2.5' 
                 : 'hover:bg-[#1E293B]/40 text-slate-300 hover:text-white'
-            }`}
+            } ${draggingFilePath === child.path ? 'opacity-50' : ''}`}
             onClick={() => !isRenamingThis && onSelectFile(child.path)}
             id={`file-item-${child.path.replace(/[^a-zA-Z0-9]/g, '-')}`}
           >
@@ -336,6 +513,12 @@ export const FileTree: React.FC<FileTreeProps> = ({
                     type="text"
                     value={renamingName}
                     onChange={(e) => setRenamingName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        setRenamingPath(null);
+                      }
+                    }}
+                    title="Inserisci un nuovo nome o percorso (es. src/file.tsx)"
                     className="w-full bg-slate-900 border border-sky-500 rounded px-1 text-xs py-0.5 text-white outline-none"
                     autoFocus
                     onBlur={() => setRenamingPath(null)}
@@ -352,9 +535,9 @@ export const FileTree: React.FC<FileTreeProps> = ({
                   onClick={(e) => {
                     e.stopPropagation();
                     setRenamingPath(child.path);
-                    setRenamingName(child.name);
+                    setRenamingName(child.path);
                   }}
-                  title="Rinomina"
+                  title="Rinomina o sposta (es. src/nome.tsx)"
                   className="p-1 text-slate-400 hover:text-sky-400 hover:bg-slate-700/50 rounded"
                   id={`rename-btn-${child.path.replace(/[^a-zA-Z0-9]/g, '-')}`}
                 >
@@ -377,11 +560,30 @@ export const FileTree: React.FC<FileTreeProps> = ({
         );
       } else {
         // Render Directory Folder Node
+        const isDragOver = dragOverFolder === child.path;
         return (
           <div key={child.path} className="flex flex-col">
             <div 
-              className="group flex items-center justify-between px-3 py-1.5 mx-1 rounded-md cursor-pointer hover:bg-slate-800/40 text-slate-300 hover:text-white"
+              className={`group flex items-center justify-between px-3 py-1.5 mx-1 rounded-md cursor-pointer transition-colors ${
+                isDragOver
+                  ? 'bg-sky-500/20 border border-sky-400/60 text-white'
+                  : 'hover:bg-slate-800/40 text-slate-300 hover:text-white'
+              }`}
               onClick={() => toggleFolder(child.path)}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (dragOverFolder !== child.path) {
+                  setDragOverFolder(child.path);
+                }
+              }}
+              onDragLeave={(e) => {
+                e.stopPropagation();
+                if (dragOverFolder === child.path) {
+                  setDragOverFolder(null);
+                }
+              }}
+              onDrop={(e) => handleDropOnTarget(e, child.path)}
               id={`folder-item-${child.path.replace(/[^a-zA-Z0-9]/g, '-')}`}
             >
               <div className="flex items-center space-x-2 flex-1 min-w-0" style={{ paddingLeft: `${depth * 12}px` }}>
@@ -396,19 +598,33 @@ export const FileTree: React.FC<FileTreeProps> = ({
                 <span className="text-xs truncate font-medium text-slate-200">{child.name}</span>
               </div>
 
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setTargetFolder(child.path);
-                  setCollapsedFolders(prev => ({ ...prev, [child.path]: false }));
-                  setIsCreatingFile(true);
-                }}
-                title={`Nuovo file in ${child.path}`}
-                className="p-1 text-slate-400 hover:text-sky-400 hover:bg-slate-700/50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
-                id={`new-file-in-${child.path.replace(/[^a-zA-Z0-9]/g, '-')}`}
-              >
-                <Plus className="w-3 h-3" />
-              </button>
+              <div className="flex items-center space-x-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleTriggerFolderFileUpload(child.path);
+                  }}
+                  title={`Carica file in ${child.path}`}
+                  className="p-1 text-slate-400 hover:text-emerald-400 hover:bg-slate-700/50 rounded"
+                  id={`upload-file-in-${child.path.replace(/[^a-zA-Z0-9]/g, '-')}`}
+                >
+                  <FileUp className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setTargetFolder(child.path);
+                    setCollapsedFolders(prev => ({ ...prev, [child.path]: false }));
+                    setIsCreatingFile(true);
+                    treeScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+                  }}
+                  title={`Nuovo file in ${child.path}`}
+                  className="p-1 text-slate-400 hover:text-sky-400 hover:bg-slate-700/50 rounded"
+                  id={`new-file-in-${child.path.replace(/[^a-zA-Z0-9]/g, '-')}`}
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+              </div>
             </div>
 
             {!isCollapsed && (
@@ -458,9 +674,9 @@ export const FileTree: React.FC<FileTreeProps> = ({
           
           {/* Upload Files Button */}
           <button
-            onClick={() => fileInputRef.current?.click()}
+            onClick={handleTriggerRootFileUpload}
             className="flex items-center justify-center space-x-1 px-2.5 py-1.5 bg-[#1E293B] hover:bg-slate-800 border border-slate-800 text-slate-200 hover:text-white rounded-md transition text-[11px] font-medium"
-            title="Carica singoli file locali"
+            title="Carica singoli file locali e scegli la cartella di destinazione"
             id="btn-upload-files"
           >
             <FileUp className="w-3.5 h-3.5 text-sky-400" />
@@ -491,6 +707,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
             onClick={() => {
               setTargetFolder('');
               setIsCreatingFile(true);
+              treeScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             className="flex items-center justify-center space-x-1 px-2.5 py-1.5 bg-[#38BDF8] hover:bg-[#7dd3fc] text-[#0F172A] rounded-md transition text-[11px] font-bold"
             id="btn-new-file"
@@ -535,7 +752,24 @@ export const FileTree: React.FC<FileTreeProps> = ({
       </div>
 
       {/* File Tree List */}
-      <div className="flex-1 overflow-y-auto py-2 flex flex-col space-y-0.5 custom-scrollbar select-none">
+      <div
+        ref={treeScrollRef}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (dragOverFolder !== '') {
+            setDragOverFolder('');
+          }
+        }}
+        onDragLeave={(e) => {
+          if (e.currentTarget === e.target) {
+            setDragOverFolder(null);
+          }
+        }}
+        onDrop={(e) => handleDropOnTarget(e, '')}
+        className={`flex-1 overflow-y-auto py-2 flex flex-col space-y-0.5 custom-scrollbar select-none transition-colors ${
+          dragOverFolder === '' ? 'bg-sky-500/5 ring-1 ring-inset ring-sky-500/30' : ''
+        }`}
+      >
         
         {/* Create File Mini Form */}
         {isCreatingFile && (
@@ -604,7 +838,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
 
         {files.length === 0 ? (
           <div className="p-4 text-center text-xs text-slate-500">
-            Nessun file caricato. Trascina una cartella o premi 'Carica Cartella'.
+            Nessun file caricato. Trascina file qui o premi 'Carica Cartella'.
           </div>
         ) : (
           <div className="flex flex-col">
@@ -612,6 +846,100 @@ export const FileTree: React.FC<FileTreeProps> = ({
           </div>
         )}
       </div>
+
+      {/* Upload Destination Modal */}
+      {pendingUploadFiles && pendingUploadFiles.length > 0 && (
+        <div
+          className="fixed inset-0 bg-[#0F172A]/85 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setPendingUploadFiles(null)}
+        >
+          <form
+            onSubmit={handleConfirmUploadModal}
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#0B1120] border border-slate-700 rounded-xl p-5 max-w-md w-full shadow-2xl flex flex-col space-y-4"
+            id="upload-destination-modal"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <FolderInput className="w-4 h-4 text-[#38BDF8]" />
+                <span>Scegli cartella di destinazione</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setPendingUploadFiles(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-900/70 border border-slate-800 rounded-lg p-2.5 max-h-28 overflow-y-auto space-y-1">
+              <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 mb-1">
+                File selezionati ({pendingUploadFiles.length}):
+              </div>
+              {pendingUploadFiles.map((f, idx) => (
+                <div key={idx} className="text-xs text-slate-200 font-mono truncate flex items-center gap-1.5">
+                  <FileCode className={`w-3.5 h-3.5 flex-shrink-0 ${getIconColor(f.name)}`} />
+                  <span className="truncate">{f.name}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-col space-y-1.5">
+              <label className="text-[11px] font-medium text-slate-300">
+                Cartella esistente:
+              </label>
+              <select
+                value={uploadModalFolder}
+                onChange={(e) => {
+                  setUploadModalFolder(e.target.value);
+                  setUploadCustomFolder('');
+                }}
+                className="bg-slate-900 border border-slate-700 text-xs rounded-md p-2 text-slate-100 outline-none focus:border-sky-500 font-mono"
+                id="select-upload-destination-folder"
+              >
+                <option value="">/ (cartella principale)</option>
+                {existingFolders.map(folder => (
+                  <option key={folder} value={folder}>
+                    {folder}/
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col space-y-1.5">
+              <label className="text-[11px] font-medium text-slate-300">
+                Oppure inserisci un percorso personalizzato (opzionale):
+              </label>
+              <input
+                type="text"
+                value={uploadCustomFolder}
+                onChange={(e) => setUploadCustomFolder(e.target.value)}
+                placeholder="es. src/components o assets/images"
+                className="bg-slate-900 border border-slate-700 text-xs rounded-md p-2 text-white outline-none focus:border-sky-500 font-mono"
+                id="input-upload-custom-folder"
+              />
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setPendingUploadFiles(null)}
+                className="px-3.5 py-1.5 bg-[#1E293B] hover:bg-slate-700 text-slate-300 rounded-md text-xs transition"
+              >
+                Annulla
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-1.5 bg-[#38BDF8] hover:bg-[#7dd3fc] text-[#0F172A] font-bold rounded-md text-xs transition"
+                id="btn-confirm-upload-folder"
+              >
+                Carica qui
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

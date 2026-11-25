@@ -18,11 +18,12 @@ import { buildPreviewHtml, ConsoleMessage } from '../utils/previewBuilder';
 
 interface PreviewProps {
   files: VirtualFile[];
+  activeFilePath?: string | null;
   onClose?: () => void;
   isStandalone?: boolean;
 }
 
-export const Preview: React.FC<PreviewProps> = ({ files, onClose, isStandalone = false }) => {
+export const Preview: React.FC<PreviewProps> = ({ files, activeFilePath, onClose, isStandalone = false }) => {
   const [deviceMode, setDeviceMode] = useState<'desktop' | 'tablet' | 'mobile'>('desktop');
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const [consoleLogs, setConsoleLogs] = useState<ConsoleMessage[]>([]);
@@ -30,15 +31,37 @@ export const Preview: React.FC<PreviewProps> = ({ files, onClose, isStandalone =
   const [filterText, setFilterText] = useState<string>('');
   const [srcDoc, setSrcDoc] = useState<string>('');
   const [isCompiling, setIsCompiling] = useState<boolean>(false);
+  const [selectedHtmlPath, setSelectedHtmlPath] = useState<string>('');
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  const htmlFiles = React.useMemo(
+    () => files.filter(f => f.name.toLowerCase().endsWith('.html') || f.name.toLowerCase().endsWith('.htm')),
+    [files]
+  );
+
+  // If user opens/creates an HTML file in the editor, switch preview to it automatically
+  useEffect(() => {
+    if (activeFilePath && (activeFilePath.toLowerCase().endsWith('.html') || activeFilePath.toLowerCase().endsWith('.htm'))) {
+      setSelectedHtmlPath(activeFilePath);
+    }
+  }, [activeFilePath]);
+
+  // Keep selectedHtmlPath valid when files change
+  const effectiveHtmlPath = React.useMemo(() => {
+    if (selectedHtmlPath && htmlFiles.some(f => f.path === selectedHtmlPath)) {
+      return selectedHtmlPath;
+    }
+    const indexHtml = htmlFiles.find(f => f.name.toLowerCase() === 'index.html');
+    return indexHtml ? indexHtml.path : (htmlFiles[0]?.path || '');
+  }, [selectedHtmlPath, htmlFiles]);
 
   // Debounced build of live preview HTML doc to ensure smooth typing in editor
   useEffect(() => {
     setIsCompiling(true);
     const timer = setTimeout(() => {
       try {
-        const html = buildPreviewHtml(files);
+        const html = buildPreviewHtml(files, effectiveHtmlPath || undefined);
         setSrcDoc(html);
       } catch (err: any) {
         setSrcDoc(`<!DOCTYPE html><html><body style="background:#0F172A;color:#f87171;padding:20px;font-family:sans-serif;"><h3>Errore Anteprima</h3><pre>${err?.message || err}</pre></body></html>`);
@@ -48,12 +71,13 @@ export const Preview: React.FC<PreviewProps> = ({ files, onClose, isStandalone =
     }, 600);
 
     return () => clearTimeout(timer);
-  }, [files, refreshKey]);
+  }, [files, refreshKey, effectiveHtmlPath]);
 
-  // Handle messages from the iframe (captured console logs)
+  // Handle messages from the iframe (captured console logs & relative HTML navigation)
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.data && event.data.type === 'PREVIEW_CONSOLE_LOG') {
+      if (!event.data) return;
+      if (event.data.type === 'PREVIEW_CONSOLE_LOG') {
         const newLog: ConsoleMessage = {
           id: Math.random().toString(36).substr(2, 9),
           type: event.data.logType || 'log',
@@ -61,12 +85,20 @@ export const Preview: React.FC<PreviewProps> = ({ files, onClose, isStandalone =
           timestamp: event.data.timestamp || new Date().toLocaleTimeString()
         };
         setConsoleLogs(prev => [...prev.slice(-150), newLog]); // Keep last 150 logs
+      } else if (event.data.type === 'PREVIEW_NAVIGATE_HTML' && event.data.href) {
+        const cleanHref = String(event.data.href).split('?')[0].split('#')[0].replace(/^\.\//, '').replace(/^\/+/, '').toLowerCase();
+        const target = htmlFiles.find(
+          f => f.path.toLowerCase() === cleanHref || f.name.toLowerCase() === cleanHref || f.path.toLowerCase().endsWith('/' + cleanHref)
+        );
+        if (target) {
+          setSelectedHtmlPath(target.path);
+        }
       }
     };
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, []);
+  }, [htmlFiles]);
 
   // Clear logs when iframe manually reloaded
   const handleManualRefresh = () => {
@@ -111,6 +143,20 @@ export const Preview: React.FC<PreviewProps> = ({ files, onClose, isStandalone =
           <span className="font-bold text-slate-200 flex items-center gap-1.5">
             Anteprima Live
           </span>
+          {htmlFiles.length > 1 && (
+            <select
+              value={effectiveHtmlPath}
+              onChange={(e) => setSelectedHtmlPath(e.target.value)}
+              className="bg-[#1E293B] border border-slate-700 rounded px-1.5 py-0.5 text-[10px] text-slate-200 font-mono outline-none focus:border-sky-500 max-w-[130px]"
+              title="File HTML visualizzato nell'anteprima"
+            >
+              {htmlFiles.map(hf => (
+                <option key={hf.path} value={hf.path}>
+                  {hf.path}
+                </option>
+              ))}
+            </select>
+          )}
           {isCompiling && (
             <span className="text-[10px] text-sky-400 font-mono animate-pulse hidden sm:inline">
               (compilazione...)
